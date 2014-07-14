@@ -144,9 +144,9 @@ scan_string(String,  Grammar,  Offset, Tokens) ->
 
 next_token(String, Grammar, Offset) ->
   case match_action(String, Grammar) of
-    {ok, {Match, Rest, Action}} ->
-      End = point_shift(Offset, Match),
-      try   {Action(Match, Offset, End), Rest}
+    {ok, {MatchStr, Matches, Rest, Action}} ->
+      End = point_shift(Offset, MatchStr),
+      try   {Action(MatchStr, Matches, Offset, End), Rest}
       catch error:E -> {error, E}
       end;
     {error, nomatch} = Err -> Err
@@ -156,10 +156,10 @@ next_token(String, Grammar, Offset) ->
 match_action(_String, []) ->
   {error, nomatch};
 match_action(String, [{Pattern, Action}|Rules]) ->
-  case re:run(String, Pattern, [anchored, notempty, {capture, first}]) of
-    {match, [{0, MatchLen}]} ->
-      {Match, Rest} = lists:split(MatchLen, String),
-      {ok, {Match, Rest, Action}};
+  case re:run(String, Pattern, [anchored, notempty, {capture, all}]) of
+    {match, [{0, MatchLen}|_] = Matches} ->
+      {MatchStr, Rest} = lists:split(MatchLen, String),
+      {ok, {MatchStr, Matches, Rest, Action}};
     nomatch -> match_action(String, Rules)
   end.
 
@@ -208,29 +208,7 @@ multi_pattern_test_() ->
 string_test_() ->
   {setup,
    fun() ->
-       [{{"\\\"\(.*\\\\\\\"\)*.*\\\"", [dotall]}, dummy_token(0)},
-        {"[0-9]*", dummy_token(1)},
-        {"[a-z]*", dummy_token(2)},
-        {"[A-Z]*", skip()}]
-   end,
-   fun(Grammar) ->
-       [?_assertEqual({ok, [{dummy, foo_2, "foo", {1, 1, 1}, {3, 1, 3}}]},
-                      string("foo", Grammar)),
-        ?_assertEqual({ok, [{dummy, foo_2,  "foo", {1, 1, 1}, {3, 1, 3}},
-                            {dummy, '12_1', "12",  {4, 1, 4}, {5, 1, 5}}]},
-                      string("foo12", Grammar)),
-        ?_assertEqual({ok, [{dummy, foo_2, "foo", {4, 1, 4}, {6, 1, 6}}]},
-                      string("FOOfoo", Grammar)),
-        ?_assertEqual({ok, []},
-                      string("FOO", Grammar))
-       ]
-   end}.
-
-
-string_newline_test_() ->
-  {setup,
-   fun() ->
-       [{"\\\n", skip()},
+       [{"\\s*",    skip()},
         {{"\\\"\(.*\\\\\\\"\)*.*\\\"", [dotall]}, dummy_token(0)},
         {"[0-9]*", dummy_token(1)},
         {"[a-z]*", dummy_token(2)},
@@ -240,8 +218,30 @@ string_newline_test_() ->
        [?_assertEqual({ok, [{dummy, foo_2, "foo", {1, 1, 1}, {3, 1, 3}}]},
                       string("foo", Grammar)),
         ?_assertEqual({ok, [{dummy, foo_2,  "foo", {1, 1, 1}, {3, 1, 3}},
-                            {dummy, '12_1', "12",  {4, 1, 4}, {5, 1, 5}}]},
-                      string("foo12", Grammar)),
+                            {dummy, '12_1', "12",  {5, 1, 5}, {6, 1, 6}}]},
+                      string("foo 12", Grammar)),
+        ?_assertEqual({ok, [{dummy, foo_2, "foo", {5, 1, 5}, {7, 1, 7}}]},
+                      string("FOO foo", Grammar)),
+        ?_assertEqual({ok, []},
+                      string("FOO", Grammar))
+       ]
+   end}.
+
+
+string_newline_test_() ->
+  {setup,
+   fun() ->
+       [{"\n", skip()},
+        {{"\\\"\(.*\\\\\\\"\)*.*\\\"", [dotall]}, dummy_token(0)},
+        {"[0-9]*", dummy_token(1)},
+        {"[a-z]*", dummy_token(2)},
+        {"[A-Z]*", skip()}
+       ]
+   end,
+   fun(Grammar) ->
+       [
+        ?_assertEqual({ok, [{dummy, foo_2, "foo", {1, 1, 1}, {3, 1, 3}}]},
+                      string("foo", Grammar)),
         ?_assertEqual({ok, [{dummy, foo_2, "foo", {5, 2, 1}, {7, 2, 3}}]},
                       string("FOO\nfoo", Grammar)),
         ?_assertEqual({ok, []},
@@ -255,13 +255,13 @@ string_newline_test_() ->
 next_token_test_() ->
   {setup,
    fun() ->
-       compile_grammar(
-         [{{"\\\"\(.*\\\\\\\"\)*.*\\\"", [dotall]}, dummy_token(0)},
+         [{"\\\"\(.*\\\\\\\"\)*.*\\\"", dummy_token(0)},
           {"[0-9]*", dummy_token(1)},
-          {"[a-z]*", skip()}])
+          {"[a-z]*", skip()}]
    end,
    fun(Grammar)->
-       [?_assertMatch({{skip, _}, _},
+       [
+        ?_assertMatch({{skip, _}, _},
                       next_token("foo", Grammar, point())),
         ?_assertEqual({"123", "\nbar"},
                       test_chars(next_token("123\nbar", Grammar, point()))),
@@ -281,7 +281,7 @@ match_action_empty_string_test_() ->
                  match_action("", [{".*", dummy_token(1)}]))].
 
 match_action_one_rule_test_() ->
-  [?_assertEqual({ok, {"foo", "b", dummy_token()}},
+  [?_assertEqual({ok, {"foo", [{0, 3}], "b", dummy_token()}},
                  match_action("foob", [{"foo", dummy_token()}])),
    ?_assertEqual({error, nomatch},
                  match_action("foo", [])),
@@ -291,10 +291,10 @@ match_action_one_rule_test_() ->
                  match_action("foo", [{"bfoo", dummy_token()}]))].
 
 match_action_regexp_test_() ->
-  [?_assertEqual({ok, {"foo", "", dummy_token(1)}},
+  [?_assertEqual({ok, {"foo", [{0, 3}], "", dummy_token(1)}},
                  match_action("foo", [{"bar", dummy_token(0)},
                                       {"foo", dummy_token(1)}])),
-   ?_assertEqual({ok, {"foo", "", dummy_token(1)}},
+   ?_assertEqual({ok, {"foo", [{0, 3}], "", dummy_token(1)}},
                  match_action("foo", [{"bar", dummy_token(0)},
                                       {".*", dummy_token(1)}]))
   ].
@@ -308,19 +308,20 @@ dummy_token() ->
   dummy_token(0).
 
 dummy_token(I) ->
-  fun(Chars, Start, End) ->
+  fun(Chars, _Matches, Start, End) ->
       TokenTerm = list_to_atom(Chars ++ "_" ++ integer_to_list(I)),
       {token, token(dummy, TokenTerm, Chars, Start, End)}
   end.
 
 keyword_token() ->
-  fun(Chars, Start, End) ->
+  fun(Chars, _Matches, Start, End) ->
       {token, token(keyword, list_to_atom(Chars), Chars, Start, End)}
   end.
 
 
 skip() ->
-  fun(Chars, Start, End) -> {skip, token(dummy, Chars, Chars, Start, End)} end.
+  fun(Chars, _Matches, Start, End) ->
+      {skip, token(dummy, Chars, Chars, Start, End)} end.
 
 
 
