@@ -27,7 +27,7 @@
 
 %%%_* Exports ==================================================================
 -export([string/2,
-         token/4,
+         token/5,
          token_chars/1,
          point/0,
          point/3]).
@@ -77,29 +77,30 @@
                 {error, term()}.
 %%------------------------------------------------------------------------------
 string(String, Grammar) ->
-  scan_string(String, Grammar, point(), []).
+  scan_string(String, compile_grammar(Grammar), point(), []).
 
 %%------------------------------------------------------------------------------
 %% @doc Returns a new token.
--spec token(Term :: term(),
+-spec token(Type  :: term(),
+            Term  :: term(),
             Chars :: string(),
             Start :: point(),
-            End :: point()) -> token().
+            End   :: point()) -> token().
 %%------------------------------------------------------------------------------
-token(Term, Chars, Start, End) ->
-    {Term, Chars, Start, End}.
+token(Type, Term, Chars, Start, End) ->
+    {Type, Term, Chars, Start, End}.
 
 %%------------------------------------------------------------------------------
 %% @doc Returns Token's string representation
 -spec token_chars(Token :: token()) -> string().
 %%------------------------------------------------------------------------------
-token_chars({_Term, Chars, _Start, _End}) -> Chars.
+token_chars({_Type, _Term, Chars, _Start, _End}) -> Chars.
 
 %%------------------------------------------------------------------------------
 %% @doc Returns Token's end point
 -spec token_end(Token :: token()) -> point().
 %%------------------------------------------------------------------------------
-token_end({_Term, _Chars, _Start, End}) -> End.
+token_end({_Type, _Term, _Chars, _Start, End}) -> End.
 
 %%------------------------------------------------------------------------------
 %% @equiv point(1, 1, 1).
@@ -118,12 +119,14 @@ point(Pos, Line, Col) ->
   {Pos, Line, Col}.
 
 %%%_* Internal functions =======================================================
+
 point_shift(Point, String) ->
   Lines = re:split(String, "\\R", [bsr_unicode, {return, list}]),
   point_incr(Point,
         length(String) - 1,
         length(Lines) - 1,
         length(lists:last(Lines)) - 1).
+
 
 scan_string([],     _Grammar, _Offset, Tokens) -> {ok, lists:reverse(Tokens)};
 scan_string(String,  Grammar,  Offset, Tokens) ->
@@ -138,6 +141,7 @@ scan_string(String,  Grammar,  Offset, Tokens) ->
       {error, {syntax_error, {Offset, String}}}
   end.
 
+
 next_token(String, Grammar, Offset) ->
   case match_action(String, Grammar) of
     {ok, {Match, Rest, Action}} ->
@@ -148,21 +152,37 @@ next_token(String, Grammar, Offset) ->
     {error, nomatch} = Err -> Err
   end.
 
+
 match_action(_String, []) ->
   {error, nomatch};
 match_action(String, [{Pattern, Action}|Rules]) ->
-  {PatternString, Opts0} =
-     case Pattern of
-       {_PatternString, _Opts} -> Pattern;
-       _PatternString          -> {Pattern, []}
-     end,
-  Opts = Opts0 ++ [anchored, notempty, {capture, first}],
-  case re:run(String, PatternString, Opts) of
+  case re:run(String, Pattern, [anchored, notempty, {capture, first}]) of
     {match, [{0, MatchLen}]} ->
       {Match, Rest} = lists:split(MatchLen, String),
       {ok, {Match, Rest, Action}};
-    nomatch    -> match_action(String, Rules)
+    nomatch -> match_action(String, Rules)
   end.
+
+
+compile_grammar(Grammar) ->
+  F = fun(Rule, Acc) -> [compile_grammar_rule(Rule)|Acc] end,
+  lists:reverse(lists:foldl(F, [], Grammar)).
+
+
+compile_grammar_rule({{Pattern, Options}, Action}) ->
+  {compile_pattern(Pattern, Options), Action};
+compile_grammar_rule({Pattern, Action}) ->
+  {compile_pattern(Pattern, []), Action}.
+
+compile_pattern([[_|_]|_] = Patterns, Options) ->
+  Pattern = "\(" ++ string:join(Patterns, "\)\|\(") ++ "\)",
+  compile_pattern(Pattern, Options);
+compile_pattern(Pattern, Options) ->
+  case re:compile(Pattern, Options) of
+    {ok, RE}     -> RE;
+    {error, Rsn} -> erlang:error(Rsn)
+  end.
+
 
 point_incr({Pos, Line, Col}, IncrPos, 0, IncrCol) ->
     {Pos + IncrPos, Line, Col + IncrCol};
@@ -170,6 +190,20 @@ point_incr({Pos, Line, _Col}, IncrPos, IncrLine, IncrCol) ->
     {Pos + IncrPos, Line + IncrLine, IncrCol + 1}.
 
 %%%_* Tests ====================================================================
+
+multi_pattern_test_() ->
+  {setup,
+   fun() ->
+       [{{["foo", "bar"], [dotall]}, keyword_token()}]
+   end,
+   fun(Grammar) ->
+       [?_assertEqual({ok, [{keyword, foo, "foo", {1, 1, 1}, {3, 1, 3}}]},
+                      string("foo", Grammar)),
+        ?_assertEqual({ok, [{keyword, bar, "bar", {1, 1, 1}, {3, 1, 3}}]},
+                      string("bar", Grammar))
+       ]
+   end}.
+
 
 string_test_() ->
   {setup,
@@ -180,12 +214,12 @@ string_test_() ->
         {"[A-Z]*", skip()}]
    end,
    fun(Grammar) ->
-       [?_assertEqual({ok, [{foo_2, "foo", {1, 1, 1}, {3, 1, 3}}]},
+       [?_assertEqual({ok, [{dummy, foo_2, "foo", {1, 1, 1}, {3, 1, 3}}]},
                       string("foo", Grammar)),
-        ?_assertEqual({ok, [{foo_2,  "foo", {1, 1, 1}, {3, 1, 3}},
-                            {'12_1', "12",  {4, 1, 4}, {5, 1, 5}}]},
+        ?_assertEqual({ok, [{dummy, foo_2,  "foo", {1, 1, 1}, {3, 1, 3}},
+                            {dummy, '12_1', "12",  {4, 1, 4}, {5, 1, 5}}]},
                       string("foo12", Grammar)),
-        ?_assertEqual({ok, [{foo_2, "foo", {4, 1, 4}, {6, 1, 6}}]},
+        ?_assertEqual({ok, [{dummy, foo_2, "foo", {4, 1, 4}, {6, 1, 6}}]},
                       string("FOOfoo", Grammar)),
         ?_assertEqual({ok, []},
                       string("FOO", Grammar))
@@ -203,12 +237,12 @@ string_newline_test_() ->
         {"[A-Z]*", skip()}]
    end,
    fun(Grammar) ->
-       [?_assertEqual({ok, [{foo_2, "foo", {1, 1, 1}, {3, 1, 3}}]},
+       [?_assertEqual({ok, [{dummy, foo_2, "foo", {1, 1, 1}, {3, 1, 3}}]},
                       string("foo", Grammar)),
-        ?_assertEqual({ok, [{foo_2,  "foo", {1, 1, 1}, {3, 1, 3}},
-                            {'12_1', "12",  {4, 1, 4}, {5, 1, 5}}]},
+        ?_assertEqual({ok, [{dummy, foo_2,  "foo", {1, 1, 1}, {3, 1, 3}},
+                            {dummy, '12_1', "12",  {4, 1, 4}, {5, 1, 5}}]},
                       string("foo12", Grammar)),
-        ?_assertEqual({ok, [{foo_2, "foo", {5, 2, 1}, {7, 2, 3}}]},
+        ?_assertEqual({ok, [{dummy, foo_2, "foo", {5, 2, 1}, {7, 2, 3}}]},
                       string("FOO\nfoo", Grammar)),
         ?_assertEqual({ok, []},
                       string("FOO\n", Grammar)),
@@ -218,13 +252,13 @@ string_newline_test_() ->
    end}.
 
 
-
 next_token_test_() ->
   {setup,
    fun() ->
-       [{{"\\\"\(.*\\\\\\\"\)*.*\\\"", [dotall]}, dummy_token(0)},
-        {"[0-9]*", dummy_token(1)},
-        {"[a-z]*", skip()}]
+       compile_grammar(
+         [{{"\\\"\(.*\\\\\\\"\)*.*\\\"", [dotall]}, dummy_token(0)},
+          {"[0-9]*", dummy_token(1)},
+          {"[a-z]*", skip()}])
    end,
    fun(Grammar)->
        [?_assertMatch({{skip, _}, _},
@@ -276,11 +310,17 @@ dummy_token() ->
 dummy_token(I) ->
   fun(Chars, Start, End) ->
       TokenTerm = list_to_atom(Chars ++ "_" ++ integer_to_list(I)),
-      {token, token(TokenTerm, Chars, Start, End)}
+      {token, token(dummy, TokenTerm, Chars, Start, End)}
   end.
 
+keyword_token() ->
+  fun(Chars, Start, End) ->
+      {token, token(keyword, list_to_atom(Chars), Chars, Start, End)}
+  end.
+
+
 skip() ->
-  fun(Chars, Start, End) -> {skip, token(Chars, Chars, Start, End)} end.
+  fun(Chars, Start, End) -> {skip, token(dummy, Chars, Chars, Start, End)} end.
 
 
 
