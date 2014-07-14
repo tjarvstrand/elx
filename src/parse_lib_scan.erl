@@ -175,10 +175,10 @@ compile_grammar_rule({Pattern, Action}) ->
   {compile_pattern(Pattern, []), Action}.
 
 compile_pattern([[_|_]|_] = Patterns, Options) ->
-  Pattern = "\(" ++ string:join(Patterns, "\)\|\(") ++ "\)",
+  Pattern = "\(?:" ++ string:join(Patterns, "\)\|\(?:") ++ "\)",
   compile_pattern(Pattern, Options);
 compile_pattern(Pattern, Options) ->
-  case re:compile(Pattern, Options) of
+  case re:compile(Pattern ++ "(?:\\b|$)", Options) of
     {ok, RE}     -> RE;
     {error, Rsn} -> erlang:error(Rsn)
   end.
