@@ -27,12 +27,18 @@
 
 %%%_* Exports ==================================================================
 -export([string/2,
+         string/3,
+         match_group_index/2,
+         match_group_string/3,
+         match_named_group_index/2,
+         match_named_group_string/3,
          token/5,
          token_chars/1,
          point/0,
          point/3]).
 
 -export_type([grammar/0,
+              match/0,
               point/0,
               token/0]).
 
@@ -70,7 +76,68 @@
                   re_notempty |
                   {re_notempty, boolean()}.
 
+-opaque match() :: {atom(), match_index()} | match_index().
+-type  match_index() :: {integer, non_neg_integer()}.
+
 %%%_* API ======================================================================
+
+%%------------------------------------------------------------------------------
+%% @doc Return the indices of match number Group.
+%% @end
+-spec match_group_index(Group :: non_neg_integer(),
+                        Matches :: [match()]) ->
+                           match_index().
+%%------------------------------------------------------------------------------
+match_group_index(Group, Matches) ->
+  case Group + 1 > length(Matches) of
+    true  -> erlang:error({no_such_group, {Group, Matches}});
+    false -> lists:nth(Group + 1, Matches)
+  end.
+
+
+%%------------------------------------------------------------------------------
+%% @doc Return the matching string of Group in String
+%% @end
+-spec match_group_string(String :: string(),
+                         Group :: non_neg_integer(),
+                         Matches :: [match()]) ->
+                            match_index().
+%%------------------------------------------------------------------------------
+match_group_string(String, Group, Matches) ->
+  case match_group_index(Group, Matches) of
+    {-1,    _}   -> {error, nomatch};
+    {Start, Len} -> {ok, string:substr(String, Start + 1, Len)}
+  end.
+
+
+%%------------------------------------------------------------------------------
+%% @doc Return the indices of named group Group in Matches
+%% @end
+-spec match_named_group_index(Group :: non_neg_integer(),
+                              Matches :: [match()]) ->
+                                 match_index().
+%%------------------------------------------------------------------------------
+match_named_group_index(Group, Matches) ->
+  case lists:keyfind(Group, 1, Matches) of
+    false          -> erlang:error({no_such_group, {Group, Matches}});
+    {Group, Index} -> Index
+  end.
+
+%%------------------------------------------------------------------------------
+%% @doc Return the matching string of named group Group in String
+%% @end
+-spec match_named_group_string(String :: string(),
+                         Group :: non_neg_integer(),
+                         Matches :: [match()]) ->
+                            match_index().
+%%------------------------------------------------------------------------------
+match_named_group_string(String, Group, Matches) ->
+  case match_named_group_index(Group, Matches) of
+    {-1,    _}   -> {error, nomatch};
+    {Start, Len} -> {ok, string:substr(String, Start + 1, Len)}
+  end.
+
+
 
 %%------------------------------------------------------------------------------
 %% @equiv string(String, Grammar, []).
@@ -433,6 +500,63 @@ assert_opts_test_() ->
    ?_assertError({illegal_options, [foo, baz]},
                  assert_opts([{foo, bar}, {baz,  bam}]))
   ].
+
+match_group_index_test_() ->
+  {setup,
+   fun() ->
+       [{0, 1}, {1, 1}]
+   end,
+   fun(Matches) ->
+       [?_assertEqual({1, 1}, match_group_index(1, Matches)),
+        ?_assertError({no_such_group, {2, Matches}},
+                      match_group_index(2, Matches))
+       ]
+   end}.
+
+match_group_string_test_() ->
+  {setup,
+   fun() ->
+       [{-1, 0}, {1, 1}]
+   end,
+   fun(Matches) ->
+       [?_assertEqual({ok, "o"}, match_group_string("Foo", 1, Matches)),
+        ?_assertEqual({error, nomatch}, match_group_string("Foo", 0, Matches)),
+        ?_assertError({no_such_group, {2, Matches}},
+                      match_group_string("Foo", 2, Matches))
+       ]
+   end}.
+
+match_named_group_index_test_() ->
+  {setup,
+   fun() ->
+       [{group_0,    {0, 1}},
+        {subgroup_a, {-1, 0}},
+        {group_1,     {1, 1}}]
+   end,
+   fun(Matches) ->
+       [?_assertEqual({1, 1},
+                      match_named_group_index(group_1, Matches)),
+        ?_assertError({no_such_group, {group_3, Matches}},
+                      match_named_group_index(group_3, Matches))
+       ]
+   end}.
+
+match_named_group_string_test_() ->
+  {setup,
+   fun() ->
+       [{group_0,    {0, 1}},
+        {subgroup_a, {-1, 0}},
+        {group_1,     {1, 1}}]
+   end,
+   fun(Matches) ->
+       [?_assertEqual({ok, "o"},
+                      match_named_group_string("Foo", group_1, Matches)),
+        ?_assertEqual({error, nomatch},
+                      match_named_group_string("Foo", subgroup_a, Matches)),
+        ?_assertError({no_such_group, {group_3, Matches}},
+                      match_named_group_string("Foo", group_3, Matches))
+       ]
+   end}.
 
 
 %%%_* Test helpers =============================================================
