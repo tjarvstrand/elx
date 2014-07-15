@@ -67,7 +67,7 @@
 -type option() :: {re_groups, numbered_only | named_only} |
                   re_anchored |
                   {re_anchored, boolean()} |
-                  notempty |
+                  re_notempty |
                   {re_notempty, boolean()}.
 
 %%%_* API ======================================================================
