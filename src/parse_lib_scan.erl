@@ -137,8 +137,8 @@ scan_string(String,  Grammar,  Offset, Tokens) ->
     {{skip, Token}, Rest} ->
       NextPoint = point_incr(token_end(Token), 1, 0, 1),
       scan_string(Rest, Grammar, NextPoint, Tokens);
-    {error, nomatch} ->
-      {error, {syntax_error, {Offset, String}}}
+    {error, _} = Err ->
+      Err
   end.
 
 
@@ -146,10 +146,12 @@ next_token(String, Grammar, Offset) ->
   case match_action(String, Grammar) of
     {ok, {MatchStr, Matches, Rest, Action}} ->
       End = point_shift(Offset, MatchStr),
-      try   {Action(MatchStr, Matches, Offset, End), Rest}
-      catch error:E -> {error, E}
+      case Action(MatchStr, Matches, Offset, End) of
+        {error, Rsn} -> {error, {Rsn, {Offset, String}}};
+        Res          -> {Res, Rest}
       end;
-    {error, nomatch} = Err -> Err
+    {error, nomatch} ->
+      {error, {syntax_error, {Offset, String}}}
   end.
 
 
@@ -267,9 +269,9 @@ next_token_test_() ->
                       test_chars(next_token("123\nbar", Grammar, point()))),
         ?_assertMatch({"\"foo\"", ""},
                       test_chars(next_token("\"foo\"", Grammar, point()))),
-        ?_assertEqual({error, badarg},
+        ?_assertError(badarg,
                       next_token("foo", [{"foo", dummy_token(a)}], point())),
-        ?_assertEqual({error, nomatch},
+        ?_assertEqual({error, {syntax_error, {{1, 1, 1}, "foo"}}},
                       next_token("foo", [{"foao", dummy_token(a)}], point()))
        ]
    end}.
