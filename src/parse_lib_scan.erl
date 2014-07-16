@@ -74,7 +74,10 @@
                   re_anchored |
                   {re_anchored, boolean()} |
                   re_notempty |
-                  {re_notempty, boolean()}.
+                  {re_notempty, boolean()} |
+                  debug |
+                  {debug, boolean()} |
+                  {debug_fun, fun((string(), [term()]) -> any())}.
 
 -opaque match() :: {atom(), match_index()} | match_index().
 -type  match_index() :: {integer, non_neg_integer()}.
@@ -158,8 +161,11 @@ string(String, Grammar) ->
                 {ok, [token()]} |
                 {error, term()}.
 %%------------------------------------------------------------------------------
-string(String, Grammar, Opts) ->
-  scan_string(String, compile_grammar(Grammar), point(), expand_opts(Opts), []).
+string(String, Grammar, Opts0) ->
+  Opts = expand_opts(Opts0),
+  debug("Options are ~p", [Opts], Opts),
+  CompiledGrammar = compile_grammar(Grammar, Opts),
+  scan_string(String, CompiledGrammar, point(), Opts, []).
 
 
 %%------------------------------------------------------------------------------
@@ -203,6 +209,14 @@ point(Pos, Line, Col) ->
 
 %%%_* Internal functions =======================================================
 
+debug(Fmt, Args, Opts) ->
+  case lists:keyfind(debug, 1, Opts) of
+    {debug, false} -> ok;
+    {debug, true}  ->
+      {debug_fun, Fun} = lists:keyfind(debug_fun, 1, Opts),
+      Fun(Fmt, Args)
+  end.
+
 expand_opts(Opts) ->
   expand_opts(Opts, default_opts()).
 
@@ -226,7 +240,9 @@ assert_opts(Opts) ->
   end.
 
 default_opts() ->
-  [{re_groups,    numbered_only},
+  [{debug,        false},
+   {debug_fun,    fun(Fmt, Args) -> io:format(Fmt, Args) end},
+   {re_groups,    numbered_only},
    {re_anchored,  true},
    {re_notempty,  true}
   ].
@@ -242,11 +258,14 @@ point_shift(Point, String) ->
 scan_string([],     _Grammar, _Offset, _Opts, Tokens) ->
   {ok, lists:reverse(Tokens)};
 scan_string(String,  Grammar,  Offset, Opts, Tokens) ->
+  debug("Scanning token, point is at ~p", [Offset], Opts),
   case next_token(String, Grammar, Offset, Opts) of
-    {{Res, Token}, Rest} when Res =:= token ->
+    {{token, Token}, Rest} ->
+      debug("Found token ~p", [Token], Opts),
       NextPoint = point_incr(token_end(Token), 1, 0, 1),
       scan_string(Rest, Grammar, NextPoint, Opts, [Token|Tokens]);
     {{skip, Token}, Rest} ->
+      debug("Skipping token ~p", [Token], Opts),
       NextPoint = point_incr(token_end(Token), 1, 0, 1),
       scan_string(Rest, Grammar, NextPoint, Opts, Tokens);
     {error, _} = Err ->
@@ -268,67 +287,80 @@ next_token(String, Grammar, Offset, Opts) ->
       {error, {syntax_error, {Offset, String}}}
   end.
 
-match_action(_String, Rules) ->
-  match_action(_String, Rules, default_opts()).
-
 match_action(_String, [], _Opts) ->
   {error, nomatch};
-match_action(String, [{Pattern, Action}|Rules], Opts) ->
-  GroupNames = re_group_names(Pattern),
+match_action(String, [{Pattern, Re, Action}|Rules], Opts) ->
+  debug("Matching against ~p", [Pattern], Opts),
+  GroupNames = re_group_names(Re),
+  debug("Pattern group names: ~p", [GroupNames], Opts),
   ReOpts = re_run_opts(Opts, GroupNames),
-  case re:run(String, Pattern, ReOpts) of
+  debug("re:run options: ~p", [ReOpts], Opts),
+  case re:run(String, Re, ReOpts) of
     {match, [{0, MatchLen}|MatchT] = AllMatches} ->
       {MatchStr, Rest} = lists:split(MatchLen, String),
+      debug("Matched string: ~p", [MatchStr], Opts),
       MatchGroups =
         case lists:keyfind(re_groups, 1, Opts) of
           {re_groups, numbered_only} -> AllMatches;
           {re_groups, named_only}    -> lists:zip(GroupNames, MatchT)
         end,
+      debug("Match groups ~p", [MatchGroups], Opts),
       {ok, {MatchStr, MatchGroups , Rest, Action}};
-    nomatch -> match_action(String, Rules, Opts)
+    nomatch ->
+      debug("No match", [], Opts),
+      match_action(String, Rules, Opts)
   end.
 
 re_run_opts(Opts, GroupNames) ->
-  re_run_opts(Opts, GroupNames, []).
+  lists:foldl(fun(Opt, ReOpts) -> re_run_opts(Opt, GroupNames, ReOpts) end,
+             [],
+             Opts).
 
-re_run_opts([], _GroupNames, ReOpts) ->
-  lists:reverse(ReOpts);
-re_run_opts([{re_anchored, Anchored}|Opts], GroupNames, ReOpts) ->
+re_run_opts({re_anchored, Anchored}, _GroupNames, ReOpts) ->
   case Anchored of
-    true  -> re_run_opts(Opts, GroupNames, [anchored|ReOpts]);
-    false -> re_run_opts(Opts, GroupNames, ReOpts)
+    true  -> [anchored|ReOpts];
+    false -> ReOpts
   end;
-re_run_opts([{re_notempty, NotEmpty}|Opts], GroupNames, ReOpts) ->
+re_run_opts({re_notempty, NotEmpty}, _GroupNames, ReOpts) ->
   case NotEmpty of
-    true  -> re_run_opts(Opts, GroupNames, [notempty|ReOpts]);
-    false -> re_run_opts(Opts, GroupNames, ReOpts)
+    true  -> [notempty|ReOpts];
+    false -> ReOpts
   end;
-re_run_opts([{re_groups, Groups}|Opts], GroupNames, ReOpts) ->
+re_run_opts({re_groups, Groups}, GroupNames, ReOpts) ->
   Capture = case Groups of
               named_only    -> {capture, [0|GroupNames]};
               numbered_only -> {capture, all}
             end,
-  re_run_opts(Opts, GroupNames, [Capture|ReOpts]).
+  [Capture|ReOpts];
+re_run_opts(_, _GroupNames, ReOpts) ->
+  ReOpts.
 
 re_group_names(Pattern) ->
   {namelist, Names0} = re:inspect(Pattern, namelist),
   [list_to_atom(binary_to_list(N)) || N <- Names0].
 
-compile_grammar(Grammar) ->
-  F = fun(Rule, Acc) -> [compile_grammar_rule(Rule)|Acc] end,
+compile_grammar(Grammar, Opts) ->
+  debug("Compiling Grammar ~p", [Grammar], Opts),
+  F = fun(Rule, Acc) -> [compile_grammar_rule(Rule, Opts)|Acc] end,
   lists:reverse(lists:foldl(F, [], Grammar)).
 
-compile_grammar_rule({{Pattern, Options}, Action}) ->
-  {compile_pattern(Pattern, Options), Action};
-compile_grammar_rule({Pattern, Action}) ->
-  {compile_pattern(Pattern, []), Action}.
+compile_grammar_rule({{Pattern, PatternOpts}, Action}, Opts) ->
+  {CombinedPattern, Re} = compile_pattern(Pattern, PatternOpts, Opts),
+  {CombinedPattern, Re, Action};
+compile_grammar_rule({Pattern, Action}, Opts) ->
+  {CombinedPattern, Re} = compile_pattern(Pattern, [], Opts),
+  {CombinedPattern, Re, Action}.
 
-compile_pattern([[_|_]|_] = Patterns, Options) ->
+compile_pattern([[_|_]|_] = Patterns, PatternOpts, Opts) ->
   Pattern = "(?:" ++ string:join(Patterns, ")|(?:") ++ ")",
-  compile_pattern(Pattern, Options);
-compile_pattern(Pattern, Options) ->
-  case re:compile(Pattern ++ "(?:\\b|$)", Options) of
-    {ok, RE}     -> RE;
+  debug("Combining Patterns ~p", [Patterns], Opts),
+  debug("Combined Pattern ~p", [Pattern], Opts),
+  compile_pattern(Pattern, PatternOpts, Opts);
+compile_pattern(Pattern0, PatternOpts, Opts) ->
+  Pattern = Pattern0 ++ "(?:\\b|$)",
+  debug("Compiling Pattern ~p, with options ~p", [Pattern, PatternOpts], Opts),
+  case re:compile(Pattern, PatternOpts) of
+    {ok, RE}     -> {Pattern, RE};
     {error, Rsn} -> erlang:error(Rsn)
   end.
 
@@ -353,11 +385,19 @@ multi_pattern_test_() ->
    end}.
 
 compile_pattern_test_() ->
-  [?_assertEqual(re:compile("(?:a)|(?:b)(?:\\b|$)"),
-                 {ok, compile_pattern(["a", "b"], [])}),
-   ?_assertError(_,
-                 compile_pattern("(", []))
-  ].
+  {setup,
+   fun() ->
+       Pattern = "(?:a)|(?:b)(?:\\b|$)",
+       {ok, Re} = re:compile(Pattern),
+       {Pattern, Re}
+   end,
+   fun({Pattern, Re}) ->
+       [?_assertEqual({Pattern, Re},
+                      compile_pattern(["a", "b"], [], default_opts())),
+       ?_assertError(_,
+                     compile_pattern("(", [], default_opts()))
+       ]
+   end}.
 
 
 string_test_() ->
@@ -386,19 +426,25 @@ re_run_opts_test_() ->
   [?_assertEqual([], re_run_opts([], [group_1])),
    ?_assertEqual([], re_run_opts([], [group_1])),
 
-   ?_assertEqual([anchored], re_run_opts([{re_anchored, true}], [group_1])),
-   ?_assertEqual([], re_run_opts([{re_anchored, false}], [group_1])),
+   ?_assertEqual([anchored], re_run_opts([{re_anchored, true}],
+                                         [group_1])),
+   ?_assertEqual([], re_run_opts([{re_anchored, false}],
+                                 [group_1])),
 
-   ?_assertEqual([notempty], re_run_opts([{re_notempty, true}], [group_1])),
-   ?_assertEqual([], re_run_opts([{re_notempty, false}], [group_1])),
+   ?_assertEqual([notempty], re_run_opts([{re_notempty, true}],
+                                         [group_1])),
+   ?_assertEqual([], re_run_opts([{re_notempty, false}],
+                                 [group_1])),
 
    ?_assertEqual([{capture, all}],
-                 re_run_opts([{re_groups, numbered_only}], [group_1])),
+                 re_run_opts([{re_groups, numbered_only}],
+                             [group_1])),
 
    ?_assertEqual([{capture, [0, group_1]}],
-                 re_run_opts([{re_groups, named_only}], [group_1])),
+                 re_run_opts([{re_groups, named_only}],
+                             [group_1])),
 
-   ?_assertEqual([{capture, [0, group_1]}, anchored, notempty],
+   ?_assertEqual([notempty, anchored, {capture, [0, group_1]}],
                  re_run_opts([{re_groups, named_only},
                               {re_anchored, true},
                               {re_notempty, true}],
@@ -432,61 +478,85 @@ string_newline_test_() ->
 next_token_test_() ->
   {setup,
    fun() ->
-       compile_grammar(
-         [{"\\\"\(.*\\\\\\\"\)*.*\\\"", dummy_token(0)},
-          {"[0-9]*",                    dummy_token(1)},
-          {"[a-z]*",                    skip()},
-          {"@*",                        something_illegal()}])
+       Grammar1 =
+         compile_grammar(
+           [{"\\\"\(.*\\\\\\\"\)*.*\\\"", dummy_token(0)},
+            {"[0-9]*",                    dummy_token(1)},
+            {"[a-z]*",                    skip()},
+            {"@*",                        something_illegal()}],
+           default_opts()),
+       Grammar2 =
+         compile_grammar([{"foo", dummy_token(a)}], default_opts()),
+       {Grammar1, Grammar2}
    end,
-   fun(Grammar)->
+   fun({Grammar1, Grammar2})->
        [
         ?_assertMatch({{skip, _}, _},
-                      next_token("foo", Grammar, point())),
+                      next_token("foo", Grammar1, point())),
         ?_assertEqual({"123", "\nbar"},
-                      test_chars(next_token("123\nbar", Grammar, point()))),
+                      test_chars(next_token("123\nbar", Grammar1, point()))),
         ?_assertMatch({"\"foo\"", ""},
-                      test_chars(next_token("\"foo\"", Grammar, point()))),
+                      test_chars(next_token("\"foo\"", Grammar1, point()))),
         ?_assertEqual({error, {{something_illegal, "@"}, {{1, 1, 1}, "@"}}},
-                      next_token("@", Grammar, point())),
+                      next_token("@", Grammar1, point())),
         ?_assertEqual({error, {syntax_error, {{1, 1, 1}, "Foo"}}},
-                      next_token("Foo", Grammar, point())),
+                      next_token("Foo", Grammar1, point())),
         ?_assertError(badarg,
-                      next_token("foo", [{"foo", dummy_token(a)}], point()))
+                      next_token("foo", Grammar2, point()))
        ]
    end}.
 
 match_action_empty_string_test_() ->
   [?_assertEqual({error, nomatch},
-                 match_action("", compile_grammar([{"", dummy_token(1)}]))),
+                 match_action("",
+                              compile_grammar([{"", dummy_token(1)}],
+                                              default_opts()),
+                              default_opts())),
    ?_assertEqual({error, nomatch},
-                 match_action("", compile_grammar([{".*", dummy_token(1)}])))].
+                 match_action("",
+                              compile_grammar([{".*", dummy_token(1)}],
+                                              default_opts()),
+                              default_opts()))].
 
 match_action_one_rule_test_() ->
   [?_assertEqual({ok, {"foo", [{0, 3}], " b", dummy_token()}},
                  match_action("foo b",
-                              compile_grammar([{"foo", dummy_token()}]))),
-   ?_assertEqual({error, nomatch},
-                 match_action("foo", compile_grammar([]))),
-   ?_assertEqual({error, nomatch},
-                 match_action("foo",
-                              compile_grammar([{"bar", dummy_token()}]))),
+                              compile_grammar([{"foo", dummy_token()}],
+                                              default_opts()),
+                              default_opts())),
    ?_assertEqual({error, nomatch},
                  match_action("foo",
-                              compile_grammar([{"bfoo", dummy_token()}])))].
+                              compile_grammar([], default_opts()),
+                              default_opts())),
+   ?_assertEqual({error, nomatch},
+                 match_action("foo",
+                              compile_grammar([{"bar", dummy_token()}],
+                                              default_opts()),
+                              default_opts())),
+   ?_assertEqual({error, nomatch},
+                 match_action("foo",
+                              compile_grammar([{"bfoo", dummy_token()}],
+                                              default_opts()),
+                              default_opts()))].
 
 match_action_regexp_test_() ->
   [?_assertEqual({ok, {"foo", [{0, 3}], "", dummy_token(1)}},
                  match_action("foo",
                               compile_grammar([{"bar", dummy_token(0)},
-                                               {"foo", dummy_token(1)}]))),
+                                               {"foo", dummy_token(1)}],
+                                              default_opts()),
+                              default_opts())),
    ?_assertEqual({ok, {"foo", [{0, 3}], "", dummy_token(1)}},
                  match_action("foo",
                               compile_grammar([{"bar", dummy_token(0)},
-                                               {".*", dummy_token(1)}]))),
+                                               {".*", dummy_token(1)}],
+                                              default_opts()),
+                              default_opts())),
    ?_assertEqual({ok, {"foo", [{group_1, {0, 3}}], "", dummy_token(0)}},
                  match_action("foo",
                               compile_grammar([{"(?<group_1>foo)",
-                                                dummy_token(0)}]),
+                                                dummy_token(0)}],
+                                             default_opts()),
                               expand_opts([{re_groups, named_only}])))
   ].
 
@@ -558,6 +628,9 @@ match_named_group_string_test_() ->
        ]
    end}.
 
+
+debug_test() ->
+  ?assertEqual(ok, debug("Foo ~p", [bar], [{debug, true}|default_opts()])).
 
 %%%_* Test helpers =============================================================
 
