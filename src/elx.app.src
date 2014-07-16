@@ -1,4 +1,4 @@
-{application, parse_lib,
+{application, elx,
  [{description, ""},
   {vsn, "1"},
   {registered, []},
