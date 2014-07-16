@@ -277,9 +277,9 @@ next_token(String, Grammar, Offset) ->
 
 next_token(String, Grammar, Offset, Opts) ->
   case match_action(String, Grammar, Opts) of
-    {ok, {MatchStr, Matches, Rest, Action}} ->
+    {ok, {{MatchStr, MatchGroups, Action}, Rest}} ->
       End = point_shift(Offset, MatchStr),
-      case Action(MatchStr, Matches, Offset, End) of
+      case Action(MatchStr, MatchGroups, Offset, End) of
         {error, Rsn} -> {error, {Rsn, {Offset, String}}};
         Res          -> {Res, Rest}
       end;
@@ -287,17 +287,23 @@ next_token(String, Grammar, Offset, Opts) ->
       {error, {syntax_error, {Offset, String}}}
   end.
 
-match_action(_String, [], _Opts) ->
-  {error, nomatch};
-match_action(String, [{Pattern, Re, Action}|Rules], Opts) ->
+match_action(String, Rules, Opts) ->
+  case match_action(String, Rules, Opts, nomatch, 0) of
+    {nomatch, 0}   -> {error, nomatch};
+    {Match,   Len} -> {ok, {Match, string:substr(String, Len + 1)}}
+  end.
+
+match_action(_String, [], _Opts, BestMatch, BestLen) ->
+  {BestMatch, BestLen};
+match_action(String, [{Pattern, Re, Action}|Rules], Opts, BestMatch, BestLen) ->
   debug("Matching against ~p", [Pattern], Opts),
   GroupNames = re_group_names(Re),
   debug("Pattern group names: ~p", [GroupNames], Opts),
   ReOpts = re_run_opts(Opts, GroupNames),
   debug("re:run options: ~p", [ReOpts], Opts),
   case re:run(String, Re, ReOpts) of
-    {match, [{0, MatchLen}|MatchT] = AllMatches} ->
-      {MatchStr, Rest} = lists:split(MatchLen, String),
+    {match, [{0, MatchLen}|MatchT] = AllMatches} when MatchLen > BestLen ->
+      MatchStr = string:substr(String, 1, MatchLen),
       debug("Matched string: ~p", [MatchStr], Opts),
       MatchGroups =
         case lists:keyfind(re_groups, 1, Opts) of
@@ -305,10 +311,15 @@ match_action(String, [{Pattern, Re, Action}|Rules], Opts) ->
           {re_groups, named_only}    -> lists:zip(GroupNames, MatchT)
         end,
       debug("Match groups ~p", [MatchGroups], Opts),
-      {ok, {MatchStr, MatchGroups , Rest, Action}};
+      Match = {MatchStr, MatchGroups, Action},
+      match_action(String, Rules, Opts, Match, MatchLen);
+    {match, [{0, MatchLen}|_]} ->
+      debug("Matched string: ~p, but it's not the longest match",
+            [string:substr(String, 1, MatchLen)], Opts),
+      match_action(String, Rules, Opts, BestMatch, BestLen);
     nomatch ->
       debug("No match", [], Opts),
-      match_action(String, Rules, Opts)
+      match_action(String, Rules, Opts, BestMatch, BestLen)
   end.
 
 re_run_opts(Opts, GroupNames) ->
@@ -370,6 +381,22 @@ point_incr({Pos, Line, _Col}, IncrPos, IncrLine, IncrCol) ->
     {Pos + IncrPos, Line + IncrLine, IncrCol + 1}.
 
 %%%_* Tests ====================================================================
+
+longest_match_test_() ->
+  {setup,
+   fun() ->
+       [{"a", dummy_token(0)},
+        {"aa", dummy_token(2)},
+        {"a*", dummy_token(1)}]
+   end,
+   fun(Grammar) ->
+       [?_assertEqual({ok, [{dummy, aaa_1, "aaa", {1, 1, 1}, {3, 1, 3}}]},
+                      string("aaa", Grammar)),
+        ?_assertEqual({ok, [{dummy, aa_2, "aa", {1, 1, 1}, {2, 1, 2}}]},
+                      string("aa", Grammar))
+       ]
+   end}.
+
 
 multi_pattern_test_() ->
   {setup,
@@ -519,7 +546,7 @@ match_action_empty_string_test_() ->
                               default_opts()))].
 
 match_action_one_rule_test_() ->
-  [?_assertEqual({ok, {"foo", [{0, 3}], " b", dummy_token()}},
+  [?_assertEqual({ok, {{"foo", [{0, 3}], dummy_token()}, " b"}},
                  match_action("foo b",
                               compile_grammar([{"foo", dummy_token()}],
                                               default_opts()),
@@ -540,19 +567,19 @@ match_action_one_rule_test_() ->
                               default_opts()))].
 
 match_action_regexp_test_() ->
-  [?_assertEqual({ok, {"foo", [{0, 3}], "", dummy_token(1)}},
+  [?_assertEqual({ok, {{"foo", [{0, 3}], dummy_token(1)}, ""}},
                  match_action("foo",
                               compile_grammar([{"bar", dummy_token(0)},
                                                {"foo", dummy_token(1)}],
                                               default_opts()),
                               default_opts())),
-   ?_assertEqual({ok, {"foo", [{0, 3}], "", dummy_token(1)}},
+   ?_assertEqual({ok, {{"foo", [{0, 3}], dummy_token(1)}, ""}},
                  match_action("foo",
                               compile_grammar([{"bar", dummy_token(0)},
                                                {".*", dummy_token(1)}],
                                               default_opts()),
                               default_opts())),
-   ?_assertEqual({ok, {"foo", [{group_1, {0, 3}}], "", dummy_token(0)}},
+   ?_assertEqual({ok, {{"foo", [{group_1, {0, 3}}], dummy_token(0)}, ""}},
                  match_action("foo",
                               compile_grammar([{"(?<group_1>foo)",
                                                 dummy_token(0)}],
