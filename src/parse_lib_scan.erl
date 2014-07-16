@@ -367,8 +367,7 @@ compile_pattern([[_|_]|_] = Patterns, PatternOpts, Opts) ->
   debug("Combining Patterns ~p", [Patterns], Opts),
   debug("Combined Pattern ~p", [Pattern], Opts),
   compile_pattern(Pattern, PatternOpts, Opts);
-compile_pattern(Pattern0, PatternOpts, Opts) ->
-  Pattern = Pattern0 ++ "(?:\\b|$)",
+compile_pattern(Pattern, PatternOpts, Opts) ->
   debug("Compiling Pattern ~p, with options ~p", [Pattern, PatternOpts], Opts),
   case re:compile(Pattern, PatternOpts) of
     {ok, RE}     -> {Pattern, RE};
@@ -414,7 +413,7 @@ multi_pattern_test_() ->
 compile_pattern_test_() ->
   {setup,
    fun() ->
-       Pattern = "(?:a)|(?:b)(?:\\b|$)",
+       Pattern = "(?:a)|(?:b)",
        {ok, Re} = re:compile(Pattern),
        {Pattern, Re}
    end,
