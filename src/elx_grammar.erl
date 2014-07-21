@@ -72,11 +72,22 @@
 %%   {Terms, NonTerms} = lists:partition(fun is_list/1, R),
 %%   {ordsets:from_list(Terms), ordsets:from_list([L|NonTerms])}.
 
-dfa_table(Grammar) ->
-  NonTerms = first_follow(Grammar),
-  Items = closure(Grammar, NonTerms, [item_init(hd(Grammar), [])]),
-  State = #state{id = 0, items = Items, items_hash = items_hash(Items)},
-  dfa_table(Grammar, NonTerms, [State]).
+dfa_table(Productions, Starts) ->
+  NonTerms = first_follow(Productions),
+  States = init_start_states(Productions, NonTerms, Starts),
+  dfa_table(Productions, NonTerms, States).
+
+init_start_states(Productions, NonTerms, Starts) ->
+  Ids = lists:seq(0, length(Starts) - 1),
+  lists:map(fun({Id, Start}) ->
+                init_start_state(Productions, NonTerms, Start, Id)
+            end,
+            lists:zip(Ids, Starts)).
+
+init_start_state(Productions, NonTerms, Start, Id) ->
+  AuxStart = {list_to_atom(atom_to_list(Start) ++ "'"), [Start, '$']},
+  Items = closure(Productions, NonTerms, [item_init(AuxStart, [])]),
+  #state{id = Id, items = Items, items_hash = items_hash(Items)}.
 
 dfa_table(Grammar, NonTerms, States0) ->
   States = do_graph(Grammar, NonTerms, States0),
@@ -402,10 +413,10 @@ update_prod_first_test_() ->
 dfa_table_2_test_() ->
   {setup,
    fun() ->
-       dfa_table([{'S\'', ['S', '$']},
-                  {'S',   ['V', "=", 'E']}, {'S',   ['E']},
+       dfa_table([{'S',   ['V', "=", 'E']}, {'S',   ['E']},
                   {'E',   ['V']},
-                  {'V',   ["x"]}, {'V', ["*", 'E']}])
+                  {'V',   ["x"]}, {'V', ["*", 'E']}],
+                 ['S'])
    end,
    fun(Table) ->
        [?_assertEqual(10, length(Table)),
