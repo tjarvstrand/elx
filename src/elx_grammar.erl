@@ -73,7 +73,7 @@
 
 dfa_table(Grammar) ->
   NonTerms = first_follow(Grammar),
-  Items = closure(Grammar, NonTerms, [item_init(hd(Grammar), "$")]),
+  Items = closure(Grammar, NonTerms, [item_init(hd(Grammar), '_?_')]),
   dfa_table(Grammar, NonTerms, [#state{id = 0, items = Items}]).
 
 dfa_table(Grammar, NonTerms, States0) ->
@@ -98,7 +98,7 @@ graph_state(Grammar, NonTerms, #state{id = Id, items = Items}, States0) ->
 
 add_item_state(Grammar, NonTerms, Item, ItemStateId, States0) ->
   case item_next(Item) of
-    "$"            -> States0;
+    '$'            -> States0;
     {error, empty} -> States0;
     Next           ->
       From = lists:keyfind(ItemStateId, #state.id, States0),
@@ -223,6 +223,7 @@ update_prod_nullable(NonTerms, {ProdL, ProdR}) ->
 
 prod_nullable_p(NonTerms, ProdR) ->
   lists:all(fun(TermSymbol)    when is_list(TermSymbol)    -> false;
+               ('$')                                       -> false;
                (NonTermSymbol) when is_atom(NonTermSymbol) ->
                 (orddict:fetch(NonTermSymbol, NonTerms))#non_term.nullable
             end,
@@ -236,6 +237,8 @@ update_prod_first(NonTerms, {ProdL, ProdR}) ->
 
 
 prod_first(_NonTerms, [],             Acc) -> Acc;
+prod_first(_NonTerms,['$'|_Rest], Acc) ->
+  ordsets:add_element('$', Acc);
 prod_first(_NonTerms,[Symbol|_Rest], Acc) when is_list(Symbol) ->
   ordsets:add_element(Symbol, Acc);
 prod_first(NonTerms, [Symbol|Rest], Acc0) ->
@@ -251,13 +254,15 @@ update_prod_follow(NonTerms, {ProdL, ProdR}) ->
   do_update_prod_follow(NonTerms, Follow, ProdR).
 
 do_update_prod_follow(NonTerms, _ProdFollow, []) -> NonTerms;
+do_update_prod_follow(NonTerms, ProdFollow, ['$'|Rest]) ->
+  do_update_prod_follow(NonTerms, ProdFollow, Rest);
+do_update_prod_follow(NonTerms, ProdFollow, [Next|Rest]) when is_list(Next) ->
+  do_update_prod_follow(NonTerms, ProdFollow, Rest);
 do_update_prod_follow(NonTerms0, ProdFollow, [Next|Rest]) when is_atom(Next) ->
   Update = fun(NonTerm) ->
                update_non_term_follow(NonTerms0, ProdFollow, NonTerm, Rest)
            end,
   NonTerms = orddict:update(Next, Update, NonTerms0),
-  do_update_prod_follow(NonTerms, ProdFollow, Rest);
-do_update_prod_follow(NonTerms, ProdFollow, [_|Rest]) ->
   do_update_prod_follow(NonTerms, ProdFollow, Rest).
 
 
@@ -265,6 +270,12 @@ update_non_term_follow(_NTs, ProdFollow, NT, []) ->
   %% Everything up to this point has been nullable so we add the toplevel
   %% follow set to the non-terminal's follow set.
   NT#non_term{follow = ordsets:union(ProdFollow, NT#non_term.follow)};
+update_non_term_follow(_NTs, _ProdFollow, NT, ['$'|_]) ->
+  NT#non_term{follow = ordsets:add_element('$', NT#non_term.follow)};
+update_non_term_follow(_NTs, _ProdFollow, NT, [Next|_]) when is_list(Next) ->
+  %% Next is a terminal symbol. Since it's not nullable, don't add anything
+  %% after it to the follow set.
+  NT#non_term{follow = ordsets:add_element(Next, NT#non_term.follow)};
 update_non_term_follow(NTs, ProdFollow, NT0, [Next|Rest]) when is_atom(Next) ->
   %% Next is a non-terminal symbol. Add it's first set to NT0's follow set and
   %% if Next is nullable, keep the first sets of subsequent symbols until a non-
@@ -274,11 +285,7 @@ update_non_term_follow(NTs, ProdFollow, NT0, [Next|Rest]) when is_atom(Next) ->
   case NextNT#non_term.nullable of
     true  -> update_non_term_follow(NTs, ProdFollow, NT, Rest);
     false -> NT
-  end;
-update_non_term_follow(_NTs, _ProdFollow, NT, [Next|_]) ->
-  %% Next is a terminal symbol. Since it's not nullable, don't add anything
-  %% after it to the follow set.
-  NT#non_term{follow = ordsets:add_element(Next, NT#non_term.follow)}.
+  end.
 
 %% Add NonTerm2's first set to NonTerm1's follow set.
 add_first_to_follow(#non_term{follow = S0} = NT1, #non_term{first = S1}) ->
@@ -301,12 +308,12 @@ first_follow_test_() ->
                     {'E', ["y"]},                {'E', []},
                     {'F', ["x"]},                {'F', []}])),
    ?_assertEqual(
-      [{'E', #non_term{nullable = false, first = ["(", "-", "x"], follow = ["$", ")"]}},
-       {'L', #non_term{nullable = true,  first = ["("],           follow = ["$", ")", "-"]}},
-       {'M', #non_term{nullable = true,  first = ["-"],           follow = ["$", ")"]}},
+      [{'E', #non_term{nullable = false, first = ["(", "-", "x"], follow = ['$', ")"]}},
+       {'L', #non_term{nullable = true,  first = ["("],           follow = ['$', ")", "-"]}},
+       {'M', #non_term{nullable = true,  first = ["-"],           follow = ['$', ")"]}},
        {'S', #non_term{nullable = false, first = ["(", "-", "x"], follow = []}},
-       {'V', #non_term{nullable = false, first = ["x"],           follow = ["$", ")", "-"]}}],
-      first_follow([{'S', ['E', "$"]},
+       {'V', #non_term{nullable = false, first = ["x"],           follow = ['$', ")", "-"]}}],
+      first_follow([{'S', ['E', '$']},
                     {'E', ["-", 'E']}, {'E', ["(", 'E', ")"]}, {'E', ['V', 'M']},
                     {'M', ["-", 'E']}, {'M', []},
                     {'V', ["x", 'L']},
@@ -387,7 +394,7 @@ update_prod_first_test_() ->
 %% dfa_table_test() ->
 %%   ?assertEqual([#state{id = 0,
 %%                        items = [{'E',['.','T',"+",'T']},
-%%                                 {'S',['.','E',"$"]},
+%%                                 {'S',['.','E','$']},
 %%                                 {'T',['.',"id"]}],
 %%                        edges = [{'E',[2]},
 %%                                 {'T',[1]},
@@ -396,7 +403,7 @@ update_prod_first_test_() ->
 %%                        items = [{'E',['T','.',"+",'T']}],
 %%                        edges = [{"+",[4]}]},
 %%                 #state{id = 2,
-%%                        items = [{'S',['E','.',"$"]}],
+%%                        items = [{'S',['E','.','$']}],
 %%                        edges = []},
 %%                 #state{id = 3,
 %%                        items = [{'T',["id",'.']}],
@@ -409,12 +416,12 @@ update_prod_first_test_() ->
 %%                 #state{id = 5,
 %%                        items = [{'E',['T',"+",'T','.']}],
 %%                        edges = []}],
-%%                dfa_table([{'S', ['E', "$"]},
+%%                dfa_table([{'S', ['E', '$']},
 %%                           {'E', ['T', "+", 'T']},
 %%                           {'T', ["id"]}])).
 
 dfa_table_2_test() ->
-  Tab = dfa_table([{'S\'', ['S', "$"]},
+  Tab = dfa_table([{'S\'', ['S', '$']},
                    {'S',   ['V', "=", 'E']}, {'S',   ['E']},
                    {'E',   ['V']},
                    {'V',   ["x"]}, {'V', ["*", 'E']}]),
