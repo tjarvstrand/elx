@@ -45,6 +45,7 @@
 
 -record(state, {id,
                 items = [],
+                items_hash,
                 edges = orddict:new()}).
 
 %%%_* Types ====================================================================
@@ -73,7 +74,7 @@
 
 dfa_table(Grammar) ->
   NonTerms = first_follow(Grammar),
-  Items = closure(Grammar, NonTerms, [item_init(hd(Grammar), '_?_')]),
+  Items = closure(Grammar, NonTerms, [item_init(hd(Grammar), [])]),
   dfa_table(Grammar, NonTerms, [#state{id = 0, items = Items}]).
 
 dfa_table(Grammar, NonTerms, States0) ->
@@ -113,24 +114,31 @@ add_edge(#state{edges = Edges} = From, NextToken, ToId) ->
 next_state_id(States) ->
   lists:max([Id || #state{id = Id} <- States]) + 1.
 
-go_to(Grammar, NonTerms, FromState, States, Token) ->
-  ToState0 = do_go_to(Grammar, NonTerms, FromState, Token, ordsets:new()),
-  case lists:keyfind(ToState0#state.items, #state.items, States) of
+go_to(Grammar, NonTerms, From, States0, Token) ->
+  To0 = do_go_to(Grammar, NonTerms, From, Token, ordsets:new()),
+  case lists:keytake(To0#state.items_hash, #state.items_hash, States0) of
     false    ->
-      Id = next_state_id(States),
-      {Id, lists:sort([ToState0#state{id = Id}|States])};
-    #state{id = Id} ->
-      {Id, States}
+      Id = next_state_id(States0),
+      {Id, lists:sort([To0#state{id = Id}|States0])};
+    {value, #state{id = Id} = To, States} ->
+      {Id, lists:sort([merge_state_items(To, To0)|States])}
   end.
 
+merge_state_items(#state{items = Items1} = State1, #state{items = Items2}) ->
+  State1#state{items = ordsets:union(Items1, Items2)}.
+
 do_go_to(Grammar, NonTerms, #state{items = []}, _Token, Acc) ->
-  #state{items = closure(Grammar, NonTerms, Acc)};
+  Items = closure(Grammar, NonTerms, Acc),
+  #state{items = Items, items_hash = items_hash(Items)};
 do_go_to(Grammar, NonTerms, #state{items = [Item|Rst]} = State,  Token, Acc0) ->
   Acc = case item_next(Item) of
           Token -> ordsets:add_element(item_advance(Item), Acc0);
           _     -> Acc0
         end,
   do_go_to(Grammar, NonTerms, State#state{items = Rst}, Token, Acc).
+
+items_hash(Items) ->
+  erlang:phash2(ordsets:from_list([{L, R} || {L, R, _LA} <- Items])).
 
 item_advance({L, R, Lookahead}) ->
   {L, item_advance_r(R, []), Lookahead}.
@@ -293,7 +301,6 @@ add_first_to_follow(#non_term{follow = S0} = NT1, #non_term{first = S1}) ->
 
 %%%_* Tests ====================================================================
 
--define(grammar_1, ).
 
 first_follow_test_() ->
   [?_assertEqual(
