@@ -26,7 +26,7 @@
 -module(elx_grammar).
 
 %%%_* Exports ==================================================================
--export([]).
+-export([dfa_init/2]).
 
 -export_type([grammar/0]).
 
@@ -43,6 +43,7 @@
                    follow = ordsets:new()}).
 
 -record(dfa, {start = [],
+              state,
               states = []}).
 
 
@@ -60,23 +61,14 @@
 
 %%%_* Internal functions =======================================================
 
-%% grammar_symbols(Grammar) ->
-%%   grammar_symbols(Grammar, ordsets:new(), ordsets:new()).
-
-%% grammar_symbols([], Terms, NonTerms) ->
-%%   {ordsets:to_list(Terms), ordsets:to_list(NonTerms)};
-%% grammar_symbols([Prod|Rest], Terms0, NonTerms0) ->
-%%   {PTerms, PNonTerms} = production_symbols(Prod),
-%%   Terms    = ordsets:union(Terms0,    PTerms),
-%%   NonTerms = ordsets:union(NonTerms0, PNonTerms),
-%%   grammar_symbols(Rest, Terms, NonTerms).
-
-%% production_symbols({L, R}) ->
-%%   {Terms, NonTerms} = lists:partition(fun is_list/1, R),
-%%   {ordsets:from_list(Terms), ordsets:from_list([L|NonTerms])}.
+dfa_init(#dfa{start = Start} = DFA, StartSymbol) ->
+  case lists:keyfind(StartSymbol, 1, Start) of
+    {StartSymbol, StartStateId} -> {ok, DFA#dfa{state = StartStateId}};
+    {error, notfound}           -> {error, {not_start_symbol, StartSymbol}}
+  end.
 
 dfa(Productions, StartSymbols) ->
-  NonTerms = first_follow(Productions),
+  NonTerms = first(Productions),
   {Start, StartStates} = init_start_states(Productions, NonTerms, StartSymbols),
   #dfa{start = Start, states = dfa_table(Productions, NonTerms, StartStates)}.
 
@@ -164,7 +156,6 @@ item_advance_r(['.',Next|Rest], Acc) ->
 item_advance_r([Next|Rest], Acc) ->
   item_advance_r(Rest, [Next|Acc]).
 
-
 item_next(Item) ->
   case item_partition_next(Item) of
     {error, _} = E  -> E;
@@ -176,7 +167,6 @@ item_partition_next({_L, R, _LookAhead}) ->
     {_, ['.']} -> {error, empty};
     {_, ['.', Next|Rest]} -> {Next, Rest}
   end.
-
 
 closure(Grammar, NonTerms, Items0) ->
   case do_closure(Grammar, NonTerms, Items0) of
@@ -214,27 +204,25 @@ item_lookaheads(NonTerms0, Rest, {_ItemL, _ItemR, ItemLookahead}) ->
 item_init({L, R}, Lookahead) ->
   {L, ['.'|R], Lookahead}.
 
-first_follow(Productions) ->
-  first_follow(grammar_non_terms(Productions), Productions).
+first(Productions) ->
+  first(grammar_non_terms(Productions), Productions).
 
-first_follow(NonTerms0, Productions) ->
+first(NonTerms0, Productions) ->
   case do_first_follow(NonTerms0, Productions) of
     NonTerms0 -> NonTerms0;
-    NonTerms  -> first_follow(NonTerms, Productions)
+    NonTerms  -> first(NonTerms, Productions)
   end.
 
 do_first_follow(NonTerms, Productions) ->
   lists:foldl(fun(P, NonTerms1) ->
-                  production_first_follow(NonTerms1, P)
+                  production_first(NonTerms1, P)
                 end,
                 NonTerms,
                 Productions).
 
+
 production_first(NonTerms, Production) ->
   update_prod_first(update_prod_nullable(NonTerms, Production), Production).
-
-production_first_follow(NonTerms, Production) ->
-  update_prod_follow(production_first(NonTerms, Production), Production).
 
 grammar_non_terms(Grammar) ->
   orddict:from_list([{L, #non_term{}} || {L, _R} <- Grammar]).
@@ -259,7 +247,6 @@ update_prod_first(NonTerms, {ProdL, ProdR}) ->
            end,
   orddict:update(ProdL, Update, NonTerms).
 
-
 prod_first(_NonTerms, [],             Acc) -> Acc;
 prod_first(_NonTerms,['$'|_Rest], Acc) ->
   ordsets:add_element('$', Acc);
@@ -273,74 +260,31 @@ prod_first(NonTerms, [Symbol|Rest], Acc0) ->
     false -> Acc
   end.
 
-update_prod_follow(NonTerms, {ProdL, ProdR}) ->
-  Follow = (orddict:fetch(ProdL, NonTerms))#non_term.follow,
-  do_update_prod_follow(NonTerms, Follow, ProdR).
-
-do_update_prod_follow(NonTerms, _ProdFollow, []) -> NonTerms;
-do_update_prod_follow(NonTerms, ProdFollow, ['$'|Rest]) ->
-  do_update_prod_follow(NonTerms, ProdFollow, Rest);
-do_update_prod_follow(NonTerms, ProdFollow, [Next|Rest]) when is_list(Next) ->
-  do_update_prod_follow(NonTerms, ProdFollow, Rest);
-do_update_prod_follow(NonTerms0, ProdFollow, [Next|Rest]) when is_atom(Next) ->
-  Update = fun(NonTerm) ->
-               update_non_term_follow(NonTerms0, ProdFollow, NonTerm, Rest)
-           end,
-  NonTerms = orddict:update(Next, Update, NonTerms0),
-  do_update_prod_follow(NonTerms, ProdFollow, Rest).
-
-
-update_non_term_follow(_NTs, ProdFollow, NT, []) ->
-  %% Everything up to this point has been nullable so we add the toplevel
-  %% follow set to the non-terminal's follow set.
-  NT#non_term{follow = ordsets:union(ProdFollow, NT#non_term.follow)};
-update_non_term_follow(_NTs, _ProdFollow, NT, ['$'|_]) ->
-  NT#non_term{follow = ordsets:add_element('$', NT#non_term.follow)};
-update_non_term_follow(_NTs, _ProdFollow, NT, [Next|_]) when is_list(Next) ->
-  %% Next is a terminal symbol. Since it's not nullable, don't add anything
-  %% after it to the follow set.
-  NT#non_term{follow = ordsets:add_element(Next, NT#non_term.follow)};
-update_non_term_follow(NTs, ProdFollow, NT0, [Next|Rest]) when is_atom(Next) ->
-  %% Next is a non-terminal symbol. Add it's first set to NT0's follow set and
-  %% if Next is nullable, keep the first sets of subsequent symbols until a non-
-  %% nullable symbol or the end of the production is reached.
-  NextNT = orddict:fetch(Next, NTs),
-  NT = add_first_to_follow(NT0, NextNT),
-  case NextNT#non_term.nullable of
-    true  -> update_non_term_follow(NTs, ProdFollow, NT, Rest);
-    false -> NT
-  end.
-
-%% Add NonTerm2's first set to NonTerm1's follow set.
-add_first_to_follow(#non_term{follow = S0} = NT1, #non_term{first = S1}) ->
-  NT1#non_term{follow = ordsets:union(S0, S1)}.
-
 %%%_* Tests ====================================================================
 
-
-first_follow_test_() ->
+first_test_() ->
   [?_assertEqual(
-      [{'B', #non_term{nullable = false, first = ["w"],      follow = ["v", "x", "y", "z"]}},
-       {'D', #non_term{nullable = true,  first = ["x", "y"], follow = ["z"]}},
-       {'E', #non_term{nullable = true,  first = ["y"],      follow = ["x", "z"]}},
-       {'F', #non_term{nullable = true,  first = ["x"],      follow = ["z"]}},
-       {'S', #non_term{nullable = false, first = ["u"],      follow = []}}],
-      first_follow([{'S', ["u", 'B', 'D', "z"]},
-                    {'B', ['B', "v"]},           {'B', ["w"]},
-                    {'D', ['E', 'F']},
-                    {'E', ["y"]},                {'E', []},
-                    {'F', ["x"]},                {'F', []}])),
+      [{'B', #non_term{nullable = false, first = ["w"]}},
+       {'D', #non_term{nullable = true,  first = ["x", "y"]}},
+       {'E', #non_term{nullable = true,  first = ["y"]}},
+       {'F', #non_term{nullable = true,  first = ["x"]}},
+       {'S', #non_term{nullable = false, first = ["u"]}}],
+      first([{'S', ["u", 'B', 'D', "z"]},
+             {'B', ['B', "v"]},           {'B', ["w"]},
+             {'D', ['E', 'F']},
+             {'E', ["y"]},                {'E', []},
+             {'F', ["x"]},                {'F', []}])),
    ?_assertEqual(
-      [{'E', #non_term{nullable = false, first = ["(", "-", "x"], follow = ['$', ")"]}},
-       {'L', #non_term{nullable = true,  first = ["("],           follow = ['$', ")", "-"]}},
-       {'M', #non_term{nullable = true,  first = ["-"],           follow = ['$', ")"]}},
-       {'S', #non_term{nullable = false, first = ["(", "-", "x"], follow = []}},
-       {'V', #non_term{nullable = false, first = ["x"],           follow = ['$', ")", "-"]}}],
-      first_follow([{'S', ['E', '$']},
-                    {'E', ["-", 'E']}, {'E', ["(", 'E', ")"]}, {'E', ['V', 'M']},
-                    {'M', ["-", 'E']}, {'M', []},
-                    {'V', ["x", 'L']},
-                    {'L', ["(", 'E', ")"]}, {'L', []}]))].
+      [{'E', #non_term{nullable = false, first = ["(", "-", "x"]}},
+       {'L', #non_term{nullable = true,  first = ["("]}},
+       {'M', #non_term{nullable = true,  first = ["-"]}},
+       {'S', #non_term{nullable = false, first = ["(", "-", "x"]}},
+       {'V', #non_term{nullable = false, first = ["x"]}}],
+      first([{'S', ['E', '$']},
+             {'E', ["-", 'E']}, {'E', ["(", 'E', ")"]}, {'E', ['V', 'M']},
+             {'M', ["-", 'E']}, {'M', []},
+             {'V', ["x", 'L']},
+             {'L', ["(", 'E', ")"]}, {'L', []}]))].
 
 update_prod_nullable_test_() ->
   {setup,
