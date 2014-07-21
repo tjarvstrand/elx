@@ -23,51 +23,60 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%_* Module declaration =======================================================
--module(elx_grammar).
+-module(elx_dfa).
 
 %%%_* Exports ==================================================================
--export([dfa_init/2]).
+-export([init/2,
+         new/2]).
 
--export_type([grammar/0]).
+-export_type([dfa/0,
+              non_term_symbol/0,
+              token/0]).
 
 %%%_* Includes =================================================================
 -include_lib("eunit/include/eunit.hrl").
 
 %%%_* Defines ==================================================================
 
--record(grammar, {productions = [] :: non_terminal()
-                 }).
+-record(non_term, {nullable = false         :: boolean(),
+                   first    = ordsets:new() :: ordsets:ordset()}).
 
--record(non_term, {nullable = false,
-                   first = ordsets:new(),
-                   follow = ordsets:new()}).
-
--record(dfa, {start = [],
-              state,
-              states = []}).
+-record(dfa, {start = []  :: [{non_term_symbol(), state_id()}],
+              state       :: state_id(),
+              states = [] :: state()}).
 
 
--record(state, {id,
-                items = [],
-                items_hash,
-                edges = orddict:new()}).
+-record(state, {id                         :: state_id(),
+                items      = []            :: [item()],
+                items_hash                 :: integer(),
+                edges      = orddict:new() :: orddict:orddict()}).
 
 %%%_* Types ====================================================================
+-opaque dfa() :: #dfa{}.
 
--opaque grammar() :: #grammar{}.
--type non_terminal() :: #non_term{}.
+-type state()           :: #state{}.
+-type state_id()        :: non_neg_integer().
+
+-type item()            :: {ProdLeft :: non_term_symbol(),
+                            ProdR :: [token()],
+                            Lookahead :: token()}.
+
+-type token()           :: non_term_symbol() | term_symbol().
+-type non_term_symbol() :: atom().
+-type term_symbol()     :: string().
+%% -type non_term()        :: #non_term{}.
 
 %%%_* API ======================================================================
 
 %%%_* Internal functions =======================================================
 
-dfa_init(#dfa{start = Start} = DFA, StartSymbol) ->
+init(#dfa{start = Start} = DFA, StartSymbol) ->
   case lists:keyfind(StartSymbol, 1, Start) of
     {StartSymbol, StartStateId} -> {ok, DFA#dfa{state = StartStateId}};
     {error, notfound}           -> {error, {not_start_symbol, StartSymbol}}
   end.
 
-dfa(Productions, StartSymbols) ->
+new(Productions, StartSymbols) ->
   NonTerms = first(Productions),
   {Start, StartStates} = init_start_states(Productions, NonTerms, StartSymbols),
   #dfa{start = Start, states = dfa_table(Productions, NonTerms, StartStates)}.
@@ -361,7 +370,7 @@ update_prod_first_test_() ->
 dfa_table_2_test_() ->
   {setup,
    fun() ->
-       dfa([{'S',   ['V', "=", 'E']}, {'S',   ['E']},
+       new([{'S',   ['V', "=", 'E']}, {'S',   ['E']},
             {'E',   ['V']},
             {'V',   ["x"]}, {'V', ["*", 'E']}],
            ['S'])
