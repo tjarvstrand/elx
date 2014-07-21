@@ -42,6 +42,9 @@
                    first = ordsets:new(),
                    follow = ordsets:new()}).
 
+-record(dfa, {start = [],
+              states = []}).
+
 
 -record(state, {id,
                 items = [],
@@ -72,17 +75,18 @@
 %%   {Terms, NonTerms} = lists:partition(fun is_list/1, R),
 %%   {ordsets:from_list(Terms), ordsets:from_list([L|NonTerms])}.
 
-dfa_table(Productions, Starts) ->
+dfa(Productions, StartSymbols) ->
   NonTerms = first_follow(Productions),
-  States = init_start_states(Productions, NonTerms, Starts),
-  dfa_table(Productions, NonTerms, States).
+  {Start, StartStates} = init_start_states(Productions, NonTerms, StartSymbols),
+  #dfa{start = Start, states = dfa_table(Productions, NonTerms, StartStates)}.
 
-init_start_states(Productions, NonTerms, Starts) ->
-  Ids = lists:seq(0, length(Starts) - 1),
-  lists:map(fun({Id, Start}) ->
-                init_start_state(Productions, NonTerms, Start, Id)
-            end,
-            lists:zip(Ids, Starts)).
+init_start_states(Productions, NonTerms, StartSymbols) ->
+  SymbolIdMap = lists:zip(StartSymbols, lists:seq(0, length(StartSymbols) - 1)),
+  States = lists:map(fun({Start, Id}) ->
+                         init_start_state(Productions, NonTerms, Start, Id)
+                     end,
+                     SymbolIdMap),
+  {SymbolIdMap, States}.
 
 init_start_state(Productions, NonTerms, Start, Id) ->
   AuxStart = {list_to_atom(atom_to_list(Start) ++ "'"), [Start, '$']},
@@ -413,12 +417,12 @@ update_prod_first_test_() ->
 dfa_table_2_test_() ->
   {setup,
    fun() ->
-       dfa_table([{'S',   ['V', "=", 'E']}, {'S',   ['E']},
-                  {'E',   ['V']},
-                  {'V',   ["x"]}, {'V', ["*", 'E']}],
-                 ['S'])
+       dfa([{'S',   ['V', "=", 'E']}, {'S',   ['E']},
+            {'E',   ['V']},
+            {'V',   ["x"]}, {'V', ["*", 'E']}],
+           ['S'])
    end,
-   fun(Table) ->
+   fun(#dfa{states = Table}) ->
        [?_assertEqual(10, length(Table)),
         ?_assertMatch(#state{id = 0,
                              items = [{'E',['.','V'],'$'},
