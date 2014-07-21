@@ -28,12 +28,6 @@
 %%%_* Exports ==================================================================
 -export([]).
 
-%% -export([graph/1,
-%%          grammar_3/0,
-%%          closure_3/0,
-%%          closure/2]).
-
-
 -export_type([grammar/0]).
 
 %%%_* Includes =================================================================
@@ -78,35 +72,37 @@
 %%   {ordsets:from_list(Terms), ordsets:from_list([L|NonTerms])}.
 
 dfa_table(Grammar) ->
-  Items = closure(Grammar, [item_init(hd(Grammar))]),
-  dfa_table(Grammar, [#state{id = 0, items = Items}]).
+  NonTerms = first_follow(Grammar),
+  Items = closure(Grammar, NonTerms, [item_init(hd(Grammar), "$")]),
+  dfa_table(Grammar, NonTerms, [#state{id = 0, items = Items}]).
 
-dfa_table(Grammar, States0) ->
-  States = do_graph(Grammar, States0),
+dfa_table(Grammar, NonTerms, States0) ->
+  States = do_graph(Grammar, NonTerms, States0),
   case length(States) =:= length(States0) of
     true   -> States0;
-    false  -> dfa_table(Grammar, States)
+    false  -> dfa_table(Grammar, NonTerms, States)
   end.
 
-do_graph(Grammar, States0) ->
-  lists:foldl(fun(State, States) -> graph_state(Grammar, State, States)
+do_graph(Grammar, NonTerms, States0) ->
+  lists:foldl(fun(State, States) ->
+                  graph_state(Grammar, NonTerms, State, States)
               end,
               States0,
               States0).
 
-graph_state(Grammar, #state{id = Id, items = Items}, States0) ->
+graph_state(Grammar, NonTerms, #state{id = Id, items = Items}, States0) ->
   lists:foldl(fun(Item, States) ->
-                  add_item_state(Item, Id, States, Grammar) end,
+                  add_item_state(Grammar, NonTerms, Item, Id, States) end,
                States0,
                Items).
 
-add_item_state(Item, ItemStateId, States0, Grammar) ->
+add_item_state(Grammar, NonTerms, Item, ItemStateId, States0) ->
   case item_next(Item) of
-    "$"   -> States0;
-    false -> States0;
-    Next  ->
+    "$"            -> States0;
+    {error, empty} -> States0;
+    Next           ->
       From = lists:keyfind(ItemStateId, #state.id, States0),
-      {ToId, States} = go_to(Grammar, From, States0, Next),
+      {ToId, States} = go_to(Grammar, NonTerms, From, States0, Next),
       lists:keystore(ItemStateId, #state.id, States, add_edge(From, Next, ToId))
   end.
 
@@ -117,8 +113,8 @@ add_edge(#state{edges = Edges} = From, NextToken, ToId) ->
 next_state_id(States) ->
   lists:max([Id || #state{id = Id} <- States]) + 1.
 
-go_to(Grammar, FromState, States, Token) ->
-  ToState0 = do_go_to(Grammar, FromState, Token, ordsets:new()),
+go_to(Grammar, NonTerms, FromState, States, Token) ->
+  ToState0 = do_go_to(Grammar, NonTerms, FromState, Token, ordsets:new()),
   case lists:keyfind(ToState0#state.items, #state.items, States) of
     false    ->
       Id = next_state_id(States),
@@ -127,19 +123,17 @@ go_to(Grammar, FromState, States, Token) ->
       {Id, States}
   end.
 
-do_go_to(Grammar, #state{items = []}, _Token, Acc) ->
-  #state{items = closure(Grammar, Acc)};
-do_go_to(Grammar, #state{items = [Item|Rest]} = State,  Token, Acc0) ->
+do_go_to(Grammar, NonTerms, #state{items = []}, _Token, Acc) ->
+  #state{items = closure(Grammar, NonTerms, Acc)};
+do_go_to(Grammar, NonTerms, #state{items = [Item|Rst]} = State,  Token, Acc0) ->
   Acc = case item_next(Item) of
           Token -> ordsets:add_element(item_advance(Item), Acc0);
           _     -> Acc0
         end,
-  do_go_to(Grammar, State#state{items = Rest}, Token, Acc).
+  do_go_to(Grammar, NonTerms, State#state{items = Rst}, Token, Acc).
 
-
-item_init({L, R})    -> {L, ['.'|R]}.
-item_advance({L, R}) ->
-  {L, item_advance_r(R, [])}.
+item_advance({L, R, Lookahead}) ->
+  {L, item_advance_r(R, []), Lookahead}.
 
 item_advance_r(['.',Next|Rest], Acc) ->
   lists:reverse(Acc) ++ [Next, '.'] ++ Rest;
@@ -147,31 +141,54 @@ item_advance_r([Next|Rest], Acc) ->
   item_advance_r(Rest, [Next|Acc]).
 
 
-item_next({_L, R})          -> do_item_next(R).
-do_item_next(['.'])         -> false;
-do_item_next(['.', Next|_]) -> Next;
-do_item_next([_|Rest])      -> do_item_next(Rest).
-
-
-item_closure(Grammar, Item) ->
-  case item_next(Item) of
-    false  ->
-      ordsets:new();
-    Token ->
-      ordsets:from_list([item_init(P) || {S, _} = P <- Grammar, S =:= Token])
+item_next(Item) ->
+  case item_partition_next(Item) of
+    {error, _} = E  -> E;
+    {Next, _Rest}   -> Next
   end.
 
-closure(Grammar, Items0) ->
-  case do_closure(Grammar, Items0) of
+item_partition_next({_L, R, _LookAhead}) ->
+  case lists:splitwith(fun(T) -> T =/= '.' end, R) of
+    {_, ['.']} -> {error, empty};
+    {_, ['.', Next|Rest]} -> {Next, Rest}
+  end.
+
+
+closure(Grammar, NonTerms, Items0) ->
+  case do_closure(Grammar, NonTerms, Items0) of
     Items0 -> Items0;
-    Items  -> closure(Grammar, Items)
+    Items  -> closure(Grammar, NonTerms, Items)
   end.
 
-do_closure(Grammar, Items) ->
-  ordsets:fold(fun(I, Acc) -> ordsets:union(Acc, item_closure(Grammar, I)) end,
+do_closure(Grammar, NonTerms, Items) ->
+  ordsets:fold(fun(I, Acc) ->
+                   Closure = item_closure(Grammar, NonTerms, I),
+                   ordsets:union(Acc, Closure)
+               end,
                Items,
                Items).
 
+item_closure(Grammar, NonTerms, Item) ->
+  case item_partition_next(Item) of
+    {error, empty} ->
+      ordsets:new();
+    {Next, Rest} ->
+      Lookaheads = item_lookaheads(NonTerms, Rest, Item),
+      F = fun({ProdL, _ProdR} = Prod, Acc) when ProdL =:= Next ->
+             [item_init(Prod, LA) || LA <- Lookaheads] ++ Acc;
+             (_Prod, Acc) ->
+              Acc
+          end,
+      ordsets:from_list(lists:foldl(F, [], Grammar))
+  end.
+
+item_lookaheads(NonTerms0, Rest, {_ItemL, _ItemR, ItemLookahead}) ->
+  Firsts = production_first(orddict:store('.', #non_term{}, NonTerms0),
+                            {'.', Rest ++ [ItemLookahead]}),
+  (orddict:fetch('.', Firsts))#non_term.first.
+
+item_init({L, R}, Lookahead) ->
+  {L, ['.'|R], Lookahead}.
 
 first_follow(Productions) ->
   first_follow(grammar_non_terms(Productions), Productions).
@@ -189,10 +206,11 @@ do_first_follow(NonTerms, Productions) ->
                 NonTerms,
                 Productions).
 
-production_first_follow(NonTerms0, Production) ->
-  NonTerms1 = update_prod_nullable(NonTerms0, Production),
-  NonTerms2 = update_prod_first(NonTerms1, Production),
-  update_prod_follow(NonTerms2, Production).
+production_first(NonTerms, Production) ->
+  update_prod_first(update_prod_nullable(NonTerms, Production), Production).
+
+production_first_follow(NonTerms, Production) ->
+  update_prod_follow(production_first(NonTerms, Production), Production).
 
 grammar_non_terms(Grammar) ->
   orddict:from_list([{L, #non_term{}} || {L, _R} <- Grammar]).
@@ -366,34 +384,41 @@ update_prod_first_test_() ->
        ]
    end}.
 
-dfa_table_test() ->
-  ?assertEqual([#state{id = 0,
-                       items = [{'E',['.','T',"+",'T']},
-                                {'S',['.','E',"$"]},
-                                {'T',['.',"id"]}],
-                       edges = [{'E',[2]},
-                                {'T',[1]},
-                                {"id",[3]}]},
-                #state{id = 1,
-                       items = [{'E',['T','.',"+",'T']}],
-                       edges = [{"+",[4]}]},
-                #state{id = 2,
-                       items = [{'S',['E','.',"$"]}],
-                       edges = []},
-                #state{id = 3,
-                       items = [{'T',["id",'.']}],
-                       edges = []},
-                #state{id = 4,
-                       items = [{'E',['T',"+",'.','T']},
-                                {'T',['.',"id"]}],
-                       edges = [{'T',[5]},
-                                {"id",[3]}]},
-                #state{id = 5,
-                       items = [{'E',['T',"+",'T','.']}],
-                       edges = []}],
-               dfa_table([{'S', ['E', "$"]},
-                          {'E', ['T', "+", 'T']},
-                          {'T', ["id"]}])).
+%% dfa_table_test() ->
+%%   ?assertEqual([#state{id = 0,
+%%                        items = [{'E',['.','T',"+",'T']},
+%%                                 {'S',['.','E',"$"]},
+%%                                 {'T',['.',"id"]}],
+%%                        edges = [{'E',[2]},
+%%                                 {'T',[1]},
+%%                                 {"id",[3]}]},
+%%                 #state{id = 1,
+%%                        items = [{'E',['T','.',"+",'T']}],
+%%                        edges = [{"+",[4]}]},
+%%                 #state{id = 2,
+%%                        items = [{'S',['E','.',"$"]}],
+%%                        edges = []},
+%%                 #state{id = 3,
+%%                        items = [{'T',["id",'.']}],
+%%                        edges = []},
+%%                 #state{id = 4,
+%%                        items = [{'E',['T',"+",'.','T']},
+%%                                 {'T',['.',"id"]}],
+%%                        edges = [{'T',[5]},
+%%                                 {"id",[3]}]},
+%%                 #state{id = 5,
+%%                        items = [{'E',['T',"+",'T','.']}],
+%%                        edges = []}],
+%%                dfa_table([{'S', ['E', "$"]},
+%%                           {'E', ['T', "+", 'T']},
+%%                           {'T', ["id"]}])).
+
+dfa_table_2_test() ->
+  Tab = dfa_table([{'S\'', ['S', "$"]},
+                   {'S',   ['V', "=", 'E']}, {'S',   ['E']},
+                   {'E',   ['V']},
+                   {'V',   ["x"]}, {'V', ["*", 'E']}]),
+  io:fwrite(user, <<"~p ~p ~p: Tab = ~p~n">>, [self(), ?MODULE, ?LINE, Tab]).
 
 %%%_* Test helpers =============================================================
 %%%_* Emacs ====================================================================
