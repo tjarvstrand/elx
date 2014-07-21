@@ -145,8 +145,25 @@ do_go_to(Grammar, NonTerms, #state{items = [Item|Rst]} = State,  Token, Acc0) ->
         end,
   do_go_to(Grammar, NonTerms, State#state{items = Rst}, Token, Acc).
 
+closure(Grammar, NonTerms, Items0) ->
+  case do_closure(Grammar, NonTerms, Items0) of
+    Items0 -> Items0;
+    Items  -> closure(Grammar, NonTerms, Items)
+  end.
+
+do_closure(Grammar, NonTerms, Items) ->
+  ordsets:fold(fun(I, Acc) ->
+                   Closure = item_closure(Grammar, NonTerms, I),
+                   ordsets:union(Acc, Closure)
+               end,
+               Items,
+               Items).
+
 items_hash(Items) ->
   erlang:phash2(ordsets:from_list([{L, R} || {L, R, _LA} <- Items])).
+
+item_init({L, R}, Lookahead) ->
+  {L, ['.'|R], Lookahead}.
 
 item_advance({L, R, Lookahead}) ->
   {L, item_advance_r(R, []), Lookahead}.
@@ -168,20 +185,6 @@ item_partition_next({_L, R, _LookAhead}) ->
     {_, ['.', Next|Rest]} -> {Next, Rest}
   end.
 
-closure(Grammar, NonTerms, Items0) ->
-  case do_closure(Grammar, NonTerms, Items0) of
-    Items0 -> Items0;
-    Items  -> closure(Grammar, NonTerms, Items)
-  end.
-
-do_closure(Grammar, NonTerms, Items) ->
-  ordsets:fold(fun(I, Acc) ->
-                   Closure = item_closure(Grammar, NonTerms, I),
-                   ordsets:union(Acc, Closure)
-               end,
-               Items,
-               Items).
-
 item_closure(Grammar, NonTerms, Item) ->
   case item_partition_next(Item) of
     {error, empty} ->
@@ -201,19 +204,16 @@ item_lookaheads(NonTerms0, Rest, {_ItemL, _ItemR, ItemLookahead}) ->
                             {'.', Rest ++ [ItemLookahead]}),
   (orddict:fetch('.', Firsts))#non_term.first.
 
-item_init({L, R}, Lookahead) ->
-  {L, ['.'|R], Lookahead}.
-
 first(Productions) ->
   first(grammar_non_terms(Productions), Productions).
 
 first(NonTerms0, Productions) ->
-  case do_first_follow(NonTerms0, Productions) of
+  case do_first(NonTerms0, Productions) of
     NonTerms0 -> NonTerms0;
     NonTerms  -> first(NonTerms, Productions)
   end.
 
-do_first_follow(NonTerms, Productions) ->
+do_first(NonTerms, Productions) ->
   lists:foldl(fun(P, NonTerms1) ->
                   production_first(NonTerms1, P)
                 end,
