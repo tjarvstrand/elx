@@ -26,7 +26,8 @@
 -module(elx_dfa).
 
 %%%_* Exports ==================================================================
--export([init/2,
+-export([check/1,
+         init/2,
          new/2]).
 
 -export_type([dfa/0,
@@ -68,18 +69,35 @@
 
 %%%_* API ======================================================================
 
-%%%_* Internal functions =======================================================
+check(#dfa{states = States}) ->
+  case lists:flatmap(fun state_conflicts/1, States) of
+    []        -> ok;
+    Conflicts -> {error, {conflicts, Conflicts}}
+  end.
 
 init(#dfa{start = Start} = DFA, StartSymbol) ->
   case lists:keyfind(StartSymbol, 1, Start) of
     {StartSymbol, StartStateId} -> {ok, DFA#dfa{state = StartStateId}};
-    {error, notfound}           -> {error, {not_start_symbol, StartSymbol}}
+    false                       -> {error, {not_start_symbol, StartSymbol}}
   end.
 
 new(Productions, StartSymbols) ->
   NonTerms = first(Productions),
   {Start, StartStates} = init_start_states(Productions, NonTerms, StartSymbols),
   #dfa{start = Start, states = dfa_table(Productions, NonTerms, StartStates)}.
+
+%%%_* Internal functions =======================================================
+
+state_conflicts(#state{id = Id, items = Items}) ->
+  {Reduce, Shift} = lists:partition(fun item_reduce_p/1, Items),
+  Errors0 = case {Reduce, Shift} of
+              {[_|_], [_|_]} -> [{shift_reduce, Id}];
+              _              -> []
+            end,
+  case Reduce of
+    [_, _|_] -> [{reduce_reduce, Id}|Errors0];
+    _ -> Errors0
+  end.
 
 init_start_states(Productions, NonTerms, StartSymbols) ->
   SymbolIdMap = lists:zip(StartSymbols, lists:seq(0, length(StartSymbols) - 1)),
@@ -181,6 +199,9 @@ item_advance_r(['.',Next|Rest], Acc) ->
   lists:reverse(Acc) ++ [Next, '.'] ++ Rest;
 item_advance_r([Next|Rest], Acc) ->
   item_advance_r(Rest, [Next|Acc]).
+
+item_reduce_p(Item) ->
+  item_next(Item) =:= {error, empty}.
 
 item_next(Item) ->
   case item_partition_next(Item) of
@@ -460,6 +481,37 @@ dfa_table_2_test_() ->
                      lists:nth(10, Table))
        ]
    end}.
+
+check_test_() ->
+  [?_assertEqual(ok, check(#dfa{ states = [#state{id = 1,
+                                                  items = [{'S',['V','.'],'$'}],
+                                                  edges = []}]})),
+   ?_assertEqual({error, {conflicts, [{shift_reduce, 1}]}},
+                 check(#dfa{ states = [#state{id = 1,
+                                              items = [{'S',['V','.'],'$'},
+                                                       {'S',['V','.', 'E'],'$'}
+                                                      ],
+                                                  edges = []}]})),
+   ?_assertEqual({error, {conflicts, [{reduce_reduce, 1}]}},
+                 check(#dfa{ states = [#state{id = 1,
+                                              items = [{'S',['V','.'],'$'},
+                                                       {'S',['E','.'],'$'}
+                                                      ],
+                                                  edges = []}]})),
+
+   ?_assertEqual({error, {conflicts, [{reduce_reduce, 1}, {shift_reduce, 1}]}},
+                 check(#dfa{ states = [#state{id = 1,
+                                              items = [{'S',['V','.'],'$'},
+                                                       {'S',['E','.'],'$'},
+                                                       {'S',['V','.', 'E'],'$'}
+                                                      ],
+                                                  edges = []}]}))
+  ].
+
+init_test_() ->
+  [?_assertMatch({ok, #dfa{state = 1}}, init(#dfa{start = [{'S', 1}]}, 'S')),
+   ?_assertEqual({error, {not_start_symbol, 'S'}}, init(#dfa{start = []}, 'S'))
+  ].
 
 %%%_* Test helpers =============================================================
 %%%_* Emacs ====================================================================
