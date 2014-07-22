@@ -27,7 +27,7 @@
 
 %%%_* Exports ==================================================================
 -export([check/1,
-         init/2,
+         start_state/2,
          new/1]).
 
 -export_type([dfa/0]).
@@ -41,7 +41,6 @@
                    first    = ordsets:new() :: ordsets:ordset()}).
 
 -record(dfa, {start = []  :: [{elx_grammar:non_term_symbol(), state_id()}],
-              state       :: state_id(),
               states = [] :: state()}).
 
 
@@ -73,14 +72,14 @@ check(#dfa{states = States}) ->
   end.
 
 %%------------------------------------------------------------------------------
-%% @doc Initialize DFA with the state corresponding to StartSymbol.
--spec init(DFA :: dfa(), StartSymbol :: elx_grammar:non_term_symbol()) ->
-              {ok, dfa()} |
+%% @doc Return the id of dfa start state corresponding to StartSymbol.
+-spec start_state(DFA :: dfa(), StartSymbol :: elx_grammar:non_term_symbol()) ->
+              {ok, state_id()} |
               {error, {not_start_symbol, elx_grammar:non_term_symbol()}}.
 %%------------------------------------------------------------------------------
-init(#dfa{start = Start} = DFA, StartSymbol) ->
+start_state(#dfa{start = Start}, StartSymbol) ->
   case lists:keyfind(StartSymbol, 1, Start) of
-    {StartSymbol, StartStateId} -> {ok, DFA#dfa{state = StartStateId}};
+    {StartSymbol, StartStateId} -> {ok, StartStateId};
     false                       -> {error, {not_start_symbol, StartSymbol}}
   end.
 
@@ -519,8 +518,10 @@ check_test_() ->
   ].
 
 init_test_() ->
-  [?_assertMatch({ok, #dfa{state = 1}}, init(#dfa{start = [{'S', 1}]}, 'S')),
-   ?_assertEqual({error, {not_start_symbol, 'S'}}, init(#dfa{start = []}, 'S'))
+  [?_assertMatch({ok, 1},
+                 start_state(#dfa{start = [{'S', 1}]}, 'S')),
+   ?_assertEqual({error, {not_start_symbol, 'S'}},
+                 start_state(#dfa{start = []}, 'S'))
   ].
 
 %%%_* Test helpers =============================================================
