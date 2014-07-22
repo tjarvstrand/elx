@@ -110,6 +110,8 @@ rule_to_productions(#rule{non_term = Left, components = Rights}) ->
 
 %%%_* Tests ====================================================================
 
+new_rule({L, Rs}) ->
+  new_rule({L, Rs, fun(Tokens) -> hd(Tokens) end});
 new_rule({L, Rs, A}) ->
   #rule{non_term = L,
         components = Rs,
@@ -132,10 +134,12 @@ productions_test_() ->
 action_test_() ->
   {setup,
    fun() ->
-       new([{'A', [], fun(I) -> "action_"  ++ integer_to_list(I) end}], ['A'])
+       new([{'A', [], fun([I]) -> "action_"  ++ integer_to_list(I) end},
+            {'B', [] }], ['A'])
    end,
    fun(Grammar) ->
-       [?_assertEqual("action_1",action(Grammar, 'A', 1))]
+       [?_assertEqual("action_1",action(Grammar, 'A', [1])),
+        ?_assertEqual("action_2",action(Grammar, 'B', ["action_2"]))]
    end}.
 
 %%%_* Test helpers =============================================================
