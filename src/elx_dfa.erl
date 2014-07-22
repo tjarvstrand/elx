@@ -28,11 +28,9 @@
 %%%_* Exports ==================================================================
 -export([check/1,
          init/2,
-         new/2]).
+         new/1]).
 
--export_type([dfa/0,
-              non_term_symbol/0,
-              token/0]).
+-export_type([dfa/0]).
 
 %%%_* Includes =================================================================
 -include_lib("eunit/include/eunit.hrl").
@@ -42,7 +40,7 @@
 -record(non_term, {nullable = false         :: boolean(),
                    first    = ordsets:new() :: ordsets:ordset()}).
 
--record(dfa, {start = []  :: [{non_term_symbol(), state_id()}],
+-record(dfa, {start = []  :: [{elx_grammar:non_term_symbol(), state_id()}],
               state       :: state_id(),
               states = [] :: state()}).
 
@@ -58,35 +56,47 @@
 -type state()           :: #state{}.
 -type state_id()        :: non_neg_integer().
 
--type item()            :: {ProdLeft :: non_term_symbol(),
-                            ProdR :: [token()],
-                            Lookahead :: token()}.
-
--type token()           :: non_term_symbol() | term_symbol().
--type non_term_symbol() :: atom().
--type term_symbol()     :: string().
-%% -type non_term()        :: #non_term{}.
+-type item()            :: {ProdLeft  :: elx_grammar:non_term_symbol(),
+                            ProdR     :: [elx_grammar:symbol()],
+                            Lookahead :: elx_grammar:symbol()}.
 
 %%%_* API ======================================================================
 
+%%------------------------------------------------------------------------------
+%% @doc Check DFA for conflicts.
+-spec check(DFA :: dfa()) -> ok | {error, {conflicts, [{atom(), state_id()}]}}.
+%%------------------------------------------------------------------------------
 check(#dfa{states = States}) ->
   case lists:flatmap(fun state_conflicts/1, States) of
     []        -> ok;
     Conflicts -> {error, {conflicts, Conflicts}}
   end.
 
+%%------------------------------------------------------------------------------
+%% @doc Initialize DFA with the state corresponding to StartSymbol.
+-spec init(DFA :: dfa(), StartSymbol :: elx_grammar:non_term_symbol()) ->
+              {ok, dfa()} |
+              {error, {not_start_symbol, elx_grammar:non_term_symbol()}}.
+%%------------------------------------------------------------------------------
 init(#dfa{start = Start} = DFA, StartSymbol) ->
   case lists:keyfind(StartSymbol, 1, Start) of
     {StartSymbol, StartStateId} -> {ok, DFA#dfa{state = StartStateId}};
     false                       -> {error, {not_start_symbol, StartSymbol}}
   end.
 
+%%------------------------------------------------------------------------------
+%% @doc Return a new dfa() computed from Grammar
+-spec new(Grammar :: elx_grammar:grammar()) -> dfa().
+%%------------------------------------------------------------------------------
+new(Grammar) ->
+  new(elx_grammar:productions(Grammar), elx_grammar:start_symbols(Grammar)).
+
+%%%_* Internal functions =======================================================
+
 new(Productions, StartSymbols) ->
   NonTerms = first(Productions),
   {Start, StartStates} = init_start_states(Productions, NonTerms, StartSymbols),
   #dfa{start = Start, states = dfa_table(Productions, NonTerms, StartStates)}.
-
-%%%_* Internal functions =======================================================
 
 state_conflicts(#state{id = Id, items = Items}) ->
   {Reduce, Shift} = lists:partition(fun item_reduce_p/1, Items),
