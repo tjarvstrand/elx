@@ -108,14 +108,22 @@ start_symbols(#grammar{start_symbols = Start}) ->
 rule_to_productions(#rule{non_term = Left, components = Rights}) ->
   [{Left, Right} || Right <- Rights].
 
-%%%_* Tests ====================================================================
-
+new_rule({L, _Rs}) when L =:= '.' orelse
+                        L =:= '$' ->
+  erlang:error({illegal_non_terminal, L});
 new_rule({L, Rs}) ->
   new_rule({L, Rs, fun(Tokens) -> hd(Tokens) end});
 new_rule({L, Rs, A}) ->
   #rule{non_term = L,
         components = Rs,
         action = A}.
+
+%%%_* Tests ====================================================================
+
+new_test_() ->
+  [?_assertError({illegal_non_terminal, '.'}, new([{'.', [["b"]]}], ['.']))
+  ].
+
 
 start_symbols_test_() ->
   [?_assertEqual(['A', 'B'], start_symbols(new([], ['A', 'B']))),
