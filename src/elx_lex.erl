@@ -3,7 +3,7 @@
 %%% @end
 %%% @author Thomas Järvstrand <tjarvstrand@gmail.com>
 %%% @copyright
-%%% Copyright 2012 Thomas Järvstrand <tjarvstrand@gmail.com>
+%%% Copyright 2014 Thomas Järvstrand <tjarvstrand@gmail.com>
 %%%
 %%% This file is part of ELX.
 %%%
