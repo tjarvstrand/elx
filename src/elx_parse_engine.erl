@@ -43,6 +43,12 @@
 
 %%%_* API ======================================================================
 
+%%------------------------------------------------------------------------------
+%% @doc Generate a DFA based on Grammar and use it to parse the tokens in Input.
+-spec run(Grammar      :: elx_grammar:grammar(),
+          StartingRule :: elx_grammar:non_term_symbol(),
+          Input        :: [elx_lex:token()]) -> [term()].
+%%------------------------------------------------------------------------------
 run(Grammar, StartSymbol, Input) ->
   case read_tokens(init(new(Grammar), StartSymbol), Input) of
     {ok, Engine} -> {ok, stack_tokens(Engine)};
@@ -89,13 +95,14 @@ action(Engine, Token) ->
 shift(State, Engine, [Token|Rest]) ->
   {ok, {push_stack(Engine, Token, State), Rest}}.
 
-reduce({NonTerm, Symbols}, Engine0, Tokens) ->
+reduce({NonTerm, Symbols} = R, Engine0, Tokens) ->
   {Popped, Engine} = pop_stack(Engine0, length(Symbols)),
   case action(Engine, NonTerm) of
     {goto, NewState} ->
       ActionResult = elx_grammar:action(grammar(Engine0), NonTerm, Popped),
       {ok, {push_stack(Engine, ActionResult, NewState), Tokens}};
-    {error, _} = E  -> E
+    {error, _} ->
+      erlang:error({inconsistent_grammar, {reduce, R, Engine0}})
   end.
 
 new(Grammar)         -> #engine{grammar = Grammar, dfa = elx_dfa:new(Grammar)}.
