@@ -71,6 +71,7 @@
                 accept |
                 {shift, state_id()} |
                 {reduce, elx_grammar:rule()} | % fixme, not really correct
+                {goto, state_id()} |
                 {error, term()}.
 %%------------------------------------------------------------------------------
 action(#dfa{states = States}, StateId, Token) ->
@@ -108,26 +109,40 @@ new(Grammar) ->
 
 %%%_* Internal functions =======================================================
 
-action(#state{items = Items}, '$') ->
+action(State, Token) ->
+  FoldFun = fun(Fun, {error, _}) -> Fun(State, Token);
+               (_,   Res)        -> Res
+            end,
+  ThreadFuns = [fun shift/2,
+                fun reduce/2,
+                fun accept/2,
+                fun goto/2],
+  case lists:foldl(FoldFun, {error, undefined}, ThreadFuns) of
+    {error, _} when Token =:= '$' -> {error, eof};
+    {error, _}                    -> {error, {unexpected_token, Token}};
+    Res                           ->
+      Res
+  end.
+
+shift(#state{edges = Edges}, Token) when is_list(Token) ->
+  case lists:keyfind(Token, 1, Edges) of
+    {Token, [StateId|_]} -> {shift, StateId};
+    false                -> {error, no_such_shift}
+  end;
+shift(_State, _Token) ->
+  {error, {no_such_shift}}.
+
+
+goto(#state{edges = Edges}, Token) ->
+  case lists:keyfind(Token, 1, Edges) of
+    {Token, [StateId|_]} -> {goto, StateId};
+    false                -> {error, no_such_goto}
+  end.
+
+accept(#state{items = Items}, _Token) ->
   case lists:any(fun item_accept_p/1, Items) of
     true  -> accept;
     false -> {error, eof}
-  end;
-action(#state{edges = Edges}, Token) when is_atom(Token) ->
-  case lists:keyfind(Token, 1, Edges) of
-    {Token, StateId} -> {goto, StateId};
-    false            -> {error, no_such_goto}
-  end;
-action(#state{items = Items0} = State, Token) when is_list(Token) ->
-  case lists:partition(fun item_reduce_p/1, Items0) of
-    {_,     [_|_]} -> shift(State, Token);
-    {[_|_], _    } -> reduce(State, Token)
-  end.
-
-shift(#state{edges = Edges}, Token) ->
-  case lists:keyfind(Token, 1, Edges) of
-    {Token, StateId} -> {shift, StateId};
-    false            -> {error, no_such_shift}
   end.
 
 reduce(#state{items = Items}, Token) ->
@@ -150,14 +165,14 @@ new(Productions, StartSymbols) ->
   #dfa{start = Start, states = dfa_table(Productions, NonTerms, StartStates)}.
 
 state_conflicts(#state{id = Id, items = Items}) ->
-  {Reduce, Shift} = lists:partition(fun item_reduce_p/1, Items),
+  {Reduce, Shift} = lists:partition(fun(I) -> item_reduce_p(I) end, Items),
   Errors0 = case {Reduce, Shift} of
               {[_|_], [_|_]} -> [{shift_reduce, Id}];
               _              -> []
             end,
-  case Reduce of
-    [_, _|_] -> [{reduce_reduce, Id}|Errors0];
-    _ -> Errors0
+  case length(lists:ukeysort(3, Reduce)) =:= length(Reduce) of
+    false -> [{reduce_reduce, Id}|Errors0];
+    true -> Errors0
   end.
 
 init_start_states(Productions, NonTerms, StartSymbols) ->
@@ -169,7 +184,7 @@ init_start_states(Productions, NonTerms, StartSymbols) ->
   {SymbolIdMap, States}.
 
 init_start_state(Productions, NonTerms, Start, Id) ->
-  AuxStart = {list_to_atom(atom_to_list(Start) ++ "'"), [Start, '$']},
+  AuxStart = {elx_grammar:symbol_to_start_symbol(Start), [Start, '$']},
   Items = closure(Productions, NonTerms, [item_init(AuxStart, [])]),
   #state{id = Id, items = Items, items_hash = items_hash(Items)}.
 
@@ -261,14 +276,11 @@ item_advance_r(['.',Next|Rest], Acc) ->
 item_advance_r([Next|Rest], Acc) ->
   item_advance_r(Rest, [Next|Acc]).
 
-item_accept_p({_ProdL, ProdR, '$'}) ->
+item_accept_p({_ProdL, ProdR, _}) ->
   case lists:reverse(ProdR) of
     ['$', '.'|_] -> true;
     _            -> false
-  end;
-item_accept_p(_Item) ->
-  false.
-
+  end.
 
 item_reduce_p(Item) ->
   item_next(Item) =:= {error, empty}.
@@ -580,6 +592,10 @@ check_test_() ->
                                                        {'S',['E','.'],'$'},
                                                        {'S',['V','.', 'E'],'$'}
                                                       ],
+                                                  edges = []}]})),
+   ?_assertEqual(ok, check(#dfa{ states = [#state{id = 1,
+                                                  items = [{'S',['V','.'],'$'}
+                                                          ,{'S',['V','.'],'E'}],
                                                   edges = []}]}))
   ].
 
@@ -610,7 +626,7 @@ shift_test_() ->
                                items = [{'S',['.', 'V'],'$'},
                                         {'S',['.', 'E'],'$'}
                                        ],
-                              edges = [{"x", 2}]},
+                              edges = [{"x", [2]}]},
                       "x"))
   ].
 
@@ -627,20 +643,20 @@ reduce_test_() ->
                                         {'S',['E', '.'],'$'}
                                        ]},
                         'E')),
-   ?_assertEqual({reduce, {'S', ['V']}},
+   ?_assertEqual({reduce, {'S', ['E']}},
                  reduce(#state{id = 1,
-                               items = [{'S',['E', '.'],'$'},
-                                        {'S',['V', '.', "a"],'E'},
-                                        {'S',['V', '.'],'E'}
+                               items = [{'S',['E', '.', "c"], "a"},
+                                        {'S',['E', '.'], "b"},
+                                        {'S',['E', '.'], "a"}
                                        ]},
-                        'E'))
+                        "a"))
   ].
 
 action_test_() ->
   [?_assertEqual({shift, 2},
                  action(#dfa{states = [#state{id = 1,
                                               items = [{'S',['.', 'V'],'$'}],
-                                              edges = [{"x", 2}]}]},
+                                              edges = [{"x", [2]}]}]},
                         1,
                         "x")),
   ?_assertEqual({reduce, {'S', ['V']}},
@@ -657,21 +673,20 @@ action_test_() ->
   ?_assertEqual({error, eof},
                 action(#dfa{states =
                               [#state{id = 1,
-                                      items = [{'S',['V', '.'], '$'},
-                                               {'S',['V', '.', "a"], "a"}]}]},
+                                      items = [{'S',['V', '.', "a"], "a"}]}]},
                        1,
                        '$')),
-   ?_assertEqual({error, no_such_goto},
+   ?_assertEqual({error, {unexpected_token, 'A'}},
                 action(#dfa{states =
                               [#state{id = 1,
-                                      items = []}]},
+                                      items = [{'B', ['.', 'A'], "a"}]}]},
                        1,
                        'A')),
    ?_assertEqual({goto, 2},
                 action(#dfa{states =
                               [#state{id = 1,
-                                      items = [],
-                                      edges = [{'A', 2}]}]},
+                                      items = [{'B', ['.', 'A'], "a"}],
+                                      edges = [{'A', [2]}]}]},
                        1,
                        'A'))
   ].

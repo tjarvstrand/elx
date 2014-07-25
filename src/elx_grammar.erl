@@ -29,7 +29,8 @@
 -export([action/3,
          new/2,
          productions/1,
-         start_symbols/1]).
+         start_symbols/1,
+         symbol_to_start_symbol/1]).
 
 -export_type([grammar/0,
               production/0,
@@ -81,7 +82,8 @@ action(#grammar{rules = Rules}, Symbol, Tokens) ->
           StartSymbols :: [non_term_symbol()]) -> grammar().
 %%------------------------------------------------------------------------------
 new(Rules, [_|_] = StartSymbols) ->
-  #grammar{rules         = lists:map(fun new_rule/1, Rules),
+  #grammar{rules         = lists:map(fun new_rule/1,
+                                     start_rules(StartSymbols) ++ Rules),
            start_symbols = StartSymbols};
 new(_, _) ->
   erlang:error(no_start_state).
@@ -97,6 +99,13 @@ productions(#grammar{rules = Rules}) ->
   lists:flatmap(fun rule_to_productions/1, Rules).
 
 %%------------------------------------------------------------------------------
+%% @doc Return Symbol converted to a valid start symbol Grammar.
+-spec symbol_to_start_symbol(non_term_symbol()) -> non_term_symbol().
+%%------------------------------------------------------------------------------
+symbol_to_start_symbol(Symbol) ->
+  list_to_atom(atom_to_list(Symbol) ++ "'").
+
+%%------------------------------------------------------------------------------
 %% @doc Return the start symbols valid for Grammar.
 -spec start_symbols(Grammar :: grammar()) -> [non_term_symbol()].
 %%------------------------------------------------------------------------------
@@ -104,6 +113,9 @@ start_symbols(#grammar{start_symbols = Start}) ->
   Start.
 
 %%%_* Internal functions =======================================================
+
+start_rules(Symbols) ->
+  [{symbol_to_start_symbol(S), [[S, '$']]} || S <- Symbols].
 
 rule_to_productions(#rule{non_term = Left, components = Rights}) ->
   [{Left, Right} || Right <- Rights].
@@ -136,7 +148,10 @@ productions_test_() ->
        new([{'A', [["b", "c"], ["d"]], fun() -> ok end}], ['A'])
    end,
    fun(Grammar) ->
-       [?_assertEqual([{'A', ["b", "c"]}, {'A', ["d"]}], productions(Grammar))]
+       [?_assertEqual([{'A\'', ['A', '$']},
+                       {'A', ["b", "c"]},
+                       {'A', ["d"]}],
+                      productions(Grammar))]
    end}.
 
 action_test_() ->

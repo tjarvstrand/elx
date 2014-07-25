@@ -44,7 +44,10 @@
 %%%_* API ======================================================================
 
 run(Grammar, StartSymbol, Input) ->
-  read_tokens(init(new(Grammar), StartSymbol), Input).
+  case read_tokens(init(new(Grammar), StartSymbol), Input) of
+    {ok, Engine} -> {ok, stack_tokens(Engine)};
+    {error, Rsn} -> {error, {syntax_error, Rsn}}
+  end.
 
 %%%_* Internal functions =======================================================
 
@@ -54,44 +57,44 @@ init(Engine, StartSymbol) ->
     {error, Rsn}  -> erlang:error(Rsn)
   end.
 
-read_tokens(Engine, []) ->
-  case action(Engine, '$') of
-    accept       -> {ok, stack(Engine)};
-    {error, Rsn} -> error(Engine, '$', Rsn)
+read_tokens(Engine0, []) ->
+  case read_eof(Engine0) of
+    {ok, accept}          -> {ok, Engine0};
+    {ok, {Engine, ['$']}} -> read_tokens(Engine, []);
+    {error, _} = E        -> E
   end;
-read_tokens(Engine, [Token|Rest]) ->
-  read_tokens(read_token(Engine, Token), Rest).
-
-read_token(Engine0, Token) ->
-  case do_read_token(Engine0, Token) of
-    {ok, Engine} -> Engine;
-    {error, Rsn} -> error(Engine0, Token, Rsn)
+read_tokens(Engine0, Tokens0) ->
+  case read_one_token(Engine0, Tokens0) of
+    {ok, {Engine, Tokens}} -> read_tokens(Engine, Tokens);
+    {error, _} = E         -> E
   end.
 
-do_read_token(Engine, Token) ->
+read_eof(Engine) ->
+  case action(Engine, '$') of
+    accept         -> {ok, accept};
+    {reduce, Rule} -> reduce(Rule, Engine, ['$']);
+    {error, Rsn}   -> {error, {Engine, '$', Rsn}}
+  end.
+
+read_one_token(Engine, [Token|_] = Tokens) ->
   case action(Engine, Token) of
-    {shift, State} -> shift(State, Token, Engine);
-    {reduce, Rule} -> reduce(Rule, Engine, Token);
-    {error, _} = E -> E
+    {shift, State} -> shift(State, Engine, Tokens);
+    {reduce, Rule} -> reduce(Rule, Engine, Tokens);
+    {error, Rsn}   -> {error, {Engine, Token, Rsn}}
   end.
-
-error(Engine, Token, Rsn) ->
-  {error, {syntax_error, {Rsn,
-                          Engine,
-                          Token}}}.
 
 action(Engine, Token) ->
   elx_dfa:action(dfa(Engine), state(Engine), Token).
 
-shift(State, Token, Engine) ->
-  {ok, push_stack(Engine, Token, State)}.
+shift(State, Engine, [Token|Rest]) ->
+  {ok, {push_stack(Engine, Token, State), Rest}}.
 
-reduce({NonTerm, Symbols}, Engine0, Token) ->
-  {Tokens, Engine} = pop_stack(Engine0, length(Symbols)),
-  case action(Engine, Token) of
+reduce({NonTerm, Symbols}, Engine0, Tokens) ->
+  {Popped, Engine} = pop_stack(Engine0, length(Symbols)),
+  case action(Engine, NonTerm) of
     {goto, NewState} ->
-      ActionResult = elx_grammar:action(grammar(Engine0), NonTerm, Tokens),
-      {ok, push_stack(Engine, ActionResult, NewState)};
+      ActionResult = elx_grammar:action(grammar(Engine0), NonTerm, Popped),
+      {ok, {push_stack(Engine, ActionResult, NewState), Tokens}};
     {error, _} = E  -> E
   end.
 
@@ -99,10 +102,11 @@ new(Grammar)         -> #engine{grammar = Grammar, dfa = elx_dfa:new(Grammar)}.
 dfa(Engine)          -> Engine#engine.dfa.
 grammar(Engine)      -> Engine#engine.grammar.
 stack(Engine)        -> Engine#engine.stack.
-state(Engine)   -> element(2, hd(state(Engine))).
+stack_tokens(Engine) -> [T || {T, _} <- stack(Engine), T =/= undefined].
+state(Engine)        -> element(2, hd(stack(Engine))).
 pop_stack(Engine, N) ->
   {Popped, Stack} = lists:split(N, stack(Engine)),
-  {[T || {_, T} <- Popped], set_stack(Engine, Stack)}.
+  {[T || {T, _} <- Popped], set_stack(Engine, Stack)}.
 
 push_stack(Engine, Token, State) ->
   set_stack(Engine, [{Token, State}|stack(Engine)]).
@@ -112,6 +116,34 @@ set_stack(Engine, Stack)    -> Engine#engine{stack = Stack}.
 
 %%%_* Tests ====================================================================
 
+eof_test_() ->
+  [?_assertMatch({error, {syntax_error, {_, '$', eof}}},
+                 run(elx_grammar:new([{'S', [["foo", "bar"]]}], ['S']),
+                     'S',
+                     ["foo"]))
+  ].
+
+run_test_() ->
+  [?_assertEqual({ok, ["foo"]},
+                 run(elx_grammar:new([{'S', [['E']]},
+                                      {'E', [["foo"]]}],
+                                     ['S']),
+                     'S',
+                     ["foo"])),
+   ?_assertEqual({ok, ["foo+foo"]},
+                 run(elx_grammar:new(
+                       [{'S', [['E', "+", 'E']], fun(A) -> lists:concat(A) end},
+                        {'E', [["foo"]]}],
+                       ['S']),
+                     'S',
+                     ["foo", "+", "foo"])),
+   ?_assertMatch({error, {syntax_error, {_, "bar", {unexpected_token, "bar"}}}},
+                 run(elx_grammar:new([{'S', [["foo"]]}], ['S']),
+                     'S',
+                     ["foo", "bar"])),
+   ?_assertError({not_start_symbol, 'A'},
+                 run(elx_grammar:new([{'S', [["foo"]]}], ['S']), 'A', []))
+  ].
 %%%_* Test helpers =============================================================
 %%%_* Emacs ====================================================================
 %%% Local Variables:
