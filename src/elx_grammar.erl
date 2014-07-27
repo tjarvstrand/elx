@@ -46,15 +46,12 @@
 -record(grammar, {rules         :: [rule()],
                   start_symbols :: [non_term_symbol()]}).
 
--record(rule, {non_term   :: non_term_symbol(),
-               components :: [ [symbol()] ],
-               action     :: fun()}).
-
 %%%_* Types ====================================================================
 
 -opaque grammar()       :: #grammar{}.
--type rule()            :: #rule{}.
+-type rule()            :: {production(), action()}.
 -type production()      :: {non_term_symbol, [symbol()]}.
+-type action()          :: fun().
 
 -type symbol()          :: non_term_symbol() | term_symbol().
 -type non_term_symbol() :: atom().
@@ -72,8 +69,8 @@
              Symbol :: non_term_symbol(),
              Tokens :: [term()]) -> term().
 %%------------------------------------------------------------------------------
-action(#grammar{rules = Rules}, Symbol, Tokens) ->
-  #rule{action = Action} = lists:keyfind(Symbol, #rule.non_term, Rules),
+action(#grammar{rules = Rules}, Rule, Tokens) ->
+  {Rule, Action} = lists:keyfind(Rule, 1, Rules),
   Action(Tokens).
 
 %%------------------------------------------------------------------------------
@@ -96,7 +93,7 @@ new(_, _) ->
 -spec productions(Grammar :: grammar()) -> [{non_term_symbol(), [symbol()]}].
 %%------------------------------------------------------------------------------
 productions(#grammar{rules = Rules}) ->
-  lists:flatmap(fun rule_to_productions/1, Rules).
+  [Production || {Production, _Action} <- Rules].
 
 %%------------------------------------------------------------------------------
 %% @doc Return Symbol converted to a valid start symbol Grammar.
@@ -115,10 +112,7 @@ start_symbols(#grammar{start_symbols = Start}) ->
 %%%_* Internal functions =======================================================
 
 start_rules(Symbols) ->
-  [{symbol_to_start_symbol(S), [[S, '$']]} || S <- Symbols].
-
-rule_to_productions(#rule{non_term = Left, components = Rights}) ->
-  [{Left, Right} || Right <- Rights].
+  [{symbol_to_start_symbol(S), [S, '$']} || S <- Symbols].
 
 new_rule({L, _Rs}) when L =:= '.' orelse
                         L =:= '$' ->
@@ -126,9 +120,7 @@ new_rule({L, _Rs}) when L =:= '.' orelse
 new_rule({L, Rs}) ->
   new_rule({L, Rs, fun(Tokens) -> hd(Tokens) end});
 new_rule({L, Rs, A}) ->
-  #rule{non_term = L,
-        components = Rs,
-        action = A}.
+  {{L, Rs}, A}.
 
 %%%_* Tests ====================================================================
 
@@ -145,7 +137,8 @@ start_symbols_test_() ->
 productions_test_() ->
   {setup,
    fun() ->
-       new([{'A', [["b", "c"], ["d"]], fun() -> ok end}], ['A'])
+       new([{'A', ["b", "c"]},
+            {'A', ["d"]}], ['A'])
    end,
    fun(Grammar) ->
        [?_assertEqual([{'A\'', ['A', '$']},
@@ -158,11 +151,12 @@ action_test_() ->
   {setup,
    fun() ->
        new([{'A', [], fun([I]) -> "action_"  ++ integer_to_list(I) end},
-            {'B', [] }], ['A'])
+            {'B', []}],
+          ['A'])
    end,
    fun(Grammar) ->
-       [?_assertEqual("action_1",action(Grammar, 'A', [1])),
-        ?_assertEqual("action_2",action(Grammar, 'B', ["action_2"]))]
+       [?_assertEqual("action_1",action(Grammar, {'A', []}, [1])),
+        ?_assertEqual("action_2",action(Grammar, {'B', []}, ["action_2"]))]
    end}.
 
 %%%_* Test helpers =============================================================

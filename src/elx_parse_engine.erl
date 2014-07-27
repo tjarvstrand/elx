@@ -95,14 +95,14 @@ action(Engine, Token) ->
 shift(State, Engine, [Token|Rest]) ->
   {ok, {push_stack(Engine, Token, State), Rest}}.
 
-reduce({NonTerm, Symbols} = R, Engine0, Tokens) ->
+reduce({NonTerm, Symbols} = Rule, Engine0, Tokens) ->
   {Popped, Engine} = pop_stack(Engine0, length(Symbols)),
   case action(Engine, NonTerm) of
     {goto, NewState} ->
-      ActionResult = elx_grammar:action(grammar(Engine0), NonTerm, Popped),
+      ActionResult = elx_grammar:action(grammar(Engine0), Rule, Popped),
       {ok, {push_stack(Engine, ActionResult, NewState), Tokens}};
     {error, _} ->
-      erlang:error({inconsistent_grammar, {reduce, R, Engine0}})
+      erlang:error({inconsistent_grammar, {reduce, Rule, Engine0}})
   end.
 
 new(Grammar)         -> #engine{grammar = Grammar, dfa = elx_dfa:new(Grammar)}.
@@ -125,32 +125,33 @@ set_stack(Engine, Stack)    -> Engine#engine{stack = Stack}.
 
 eof_test_() ->
   [?_assertMatch({error, {syntax_error, {_, '$', eof}}},
-                 run(elx_grammar:new([{'S', [["foo", "bar"]]}], ['S']),
+                 run(elx_grammar:new([{'S', ["foo", "bar"]}], ['S']),
                      'S',
                      ["foo"]))
   ].
 
 run_test_() ->
   [?_assertEqual({ok, ["foo"]},
-                 run(elx_grammar:new([{'S', [['E']]},
-                                      {'E', [["foo"]]}],
+                 run(elx_grammar:new([{'S', ['E']},
+                                      {'E', ["foo"]}],
                                      ['S']),
                      'S',
                      ["foo"])),
    ?_assertEqual({ok, ["foo+foo"]},
                  run(elx_grammar:new(
-                       [{'S', [['E', "+", 'E']], fun(A) -> lists:concat(A) end},
-                        {'E', [["foo"]]}],
+                       [{'S', ['E', "+", 'E'], fun(A) -> lists:concat(A) end},
+                        {'E', ["foo"]}],
                        ['S']),
                      'S',
                      ["foo", "+", "foo"])),
    ?_assertMatch({error, {syntax_error, {_, "bar", {unexpected_token, "bar"}}}},
-                 run(elx_grammar:new([{'S', [["foo"]]}], ['S']),
+                 run(elx_grammar:new([{'S', ["foo"]}], ['S']),
                      'S',
                      ["foo", "bar"])),
    ?_assertError({not_start_symbol, 'A'},
                  run(elx_grammar:new([{'S', [["foo"]]}], ['S']), 'A', []))
   ].
+
 %%%_* Test helpers =============================================================
 %%%_* Emacs ====================================================================
 %%% Local Variables:

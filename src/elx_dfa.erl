@@ -68,11 +68,11 @@
 -spec action(DFA       :: dfa(),
              StateId   :: state_id(),
              Token     :: elx_grammar:symbol()) ->
-                accept |
-                {shift, state_id()} |
-                {reduce, elx_grammar:rule()} | % fixme, not really correct
-                {goto, state_id()} |
-                {error, term()}.
+                accept                             |
+                {shift,  state_id()}               |
+                {reduce, elx_grammar:production()} |
+                {goto,   state_id()}               |
+                {error,  term()}.
 %%------------------------------------------------------------------------------
 action(#dfa{states = States}, StateId, Token) ->
   action(lists:keyfind(StateId, #state.id, States), Token).
