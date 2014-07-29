@@ -31,11 +31,7 @@
          match_group_index/2,
          match_group_string/3,
          match_named_group_index/2,
-         match_named_group_string/3,
-         token/5,
-         token_chars/1,
-         point/0,
-         point/3]).
+         match_named_group_string/3]).
 
 -export_type([grammar/0,
               match/0,
@@ -165,47 +161,8 @@ string(String, Grammar, Opts0) ->
   Opts = expand_opts(Opts0),
   debug("Options are ~p", [Opts], Opts),
   CompiledGrammar = compile_grammar(Grammar, Opts),
-  scan_string(String, CompiledGrammar, point(), Opts, []).
+  scan_string(String, CompiledGrammar, elx:point(), Opts, []).
 
-
-%%------------------------------------------------------------------------------
-%% @doc Returns a new token.
--spec token(Type  :: term(),
-            Term  :: term(),
-            Chars :: string(),
-            Start :: point(),
-            End   :: point()) -> token().
-%%------------------------------------------------------------------------------
-token(Type, Term, Chars, Start, End) ->
-    {Type, Term, Chars, Start, End}.
-
-%%------------------------------------------------------------------------------
-%% @doc Returns Token's string representation
--spec token_chars(Token :: token()) -> string().
-%%------------------------------------------------------------------------------
-token_chars({_Type, _Term, Chars, _Start, _End}) -> Chars.
-
-%%------------------------------------------------------------------------------
-%% @doc Returns Token's end point
--spec token_end(Token :: token()) -> point().
-%%------------------------------------------------------------------------------
-token_end({_Type, _Term, _Chars, _Start, End}) -> End.
-
-%%------------------------------------------------------------------------------
-%% @equiv point(1, 1, 1).
--spec point() -> point().
-%%------------------------------------------------------------------------------
-point() ->
-  point(1, 1, 1).
-
-%%------------------------------------------------------------------------------
-%% @doc Returns a new point.
--spec point(Pos  :: non_neg_integer(),
-            Line :: non_neg_integer(),
-            Col  :: non_neg_integer()) -> point().
-%%------------------------------------------------------------------------------
-point(Pos, Line, Col) ->
-  {Pos, Line, Col}.
 
 %%%_* Internal functions =======================================================
 
@@ -247,13 +204,6 @@ default_opts() ->
    {re_notempty,  true}
   ].
 
-point_shift(Point, String) ->
-  Lines = re:split(String, "\\R", [bsr_unicode, {return, list}]),
-  point_incr(Point,
-        length(String) - 1,
-        length(Lines) - 1,
-        length(lists:last(Lines)) - 1).
-
 
 scan_string([],     _Grammar, _Offset, _Opts, Tokens) ->
   {ok, lists:reverse(Tokens)};
@@ -262,11 +212,11 @@ scan_string(String,  Grammar,  Offset, Opts, Tokens) ->
   case next_token(String, Grammar, Offset, Opts) of
     {{token, Token}, Rest} ->
       debug("Found token ~p", [Token], Opts),
-      NextPoint = point_incr(token_end(Token), 1, 0, 1),
+      NextPoint = point_incr(elx:token_end(Token), 1, 0, 1),
       scan_string(Rest, Grammar, NextPoint, Opts, [Token|Tokens]);
     {{skip, Token}, Rest} ->
       debug("Skipping token ~p", [Token], Opts),
-      NextPoint = point_incr(token_end(Token), 1, 0, 1),
+      NextPoint = elx:point_incr(elx:token_end(Token), 1, 0, 1),
       scan_string(Rest, Grammar, NextPoint, Opts, Tokens);
     {error, _} = Err ->
       Err
@@ -278,7 +228,7 @@ next_token(String, Grammar, Offset) ->
 next_token(String, Grammar, Offset, Opts) ->
   case match_action(String, Grammar, Opts) of
     {ok, {{MatchStr, MatchGroups, Action}, Rest}} ->
-      End = point_shift(Offset, MatchStr),
+      End = elx:point_shift(Offset, MatchStr),
       case Action(MatchStr, MatchGroups, Offset, End) of
         {error, Rsn} -> {error, {Rsn, {Offset, String}}};
         Res          -> {Res, Rest}
@@ -518,17 +468,19 @@ next_token_test_() ->
    fun({Grammar1, Grammar2})->
        [
         ?_assertMatch({{skip, _}, _},
-                      next_token("foo", Grammar1, point())),
+                      next_token("foo", Grammar1, elx:point())),
         ?_assertEqual({"123", "\nbar"},
-                      test_chars(next_token("123\nbar", Grammar1, point()))),
+                      test_chars(next_token("123\nbar",
+                                            Grammar1,
+                                            elx:point()))),
         ?_assertMatch({"\"foo\"", ""},
-                      test_chars(next_token("\"foo\"", Grammar1, point()))),
+                      test_chars(next_token("\"foo\"", Grammar1, elx:point()))),
         ?_assertEqual({error, {{something_illegal, "@"}, {{1, 1, 1}, "@"}}},
-                      next_token("@", Grammar1, point())),
+                      next_token("@", Grammar1, elx:point())),
         ?_assertEqual({error, {syntax_error, {{1, 1, 1}, "Foo"}}},
-                      next_token("Foo", Grammar1, point())),
+                      next_token("Foo", Grammar1, elx:point())),
         ?_assertError(badarg,
-                      next_token("foo", Grammar2, point()))
+                      next_token("foo", Grammar2, elx:point()))
        ]
    end}.
 
@@ -661,7 +613,7 @@ debug_test() ->
 %%%_* Test helpers =============================================================
 
 test_chars({{token, Token}, Rest}) ->
-  {token_chars(Token), Rest}.
+  {elx:token_chars(Token), Rest}.
 
 dummy_token() ->
   dummy_token(0).
@@ -669,18 +621,18 @@ dummy_token() ->
 dummy_token(I) ->
   fun(Chars, _Matches, Start, End) ->
       TokenTerm = list_to_atom(Chars ++ "_" ++ integer_to_list(I)),
-      {token, token(dummy, TokenTerm, Chars, Start, End)}
+      {token, elx:token(dummy, TokenTerm, Chars, Start, End)}
   end.
 
 keyword_token() ->
   fun(Chars, _Matches, Start, End) ->
-      {token, token(keyword, list_to_atom(Chars), Chars, Start, End)}
+      {token, elx:token(keyword, list_to_atom(Chars), Chars, Start, End)}
   end.
 
 
 skip() ->
   fun(Chars, _Matches, Start, End) ->
-      {skip, token(dummy, Chars, Chars, Start, End)} end.
+      {skip, elx:token(dummy, Chars, Chars, Start, End)} end.
 
 something_illegal() ->
   fun(Chars, _Matches, __Start, _End) ->
