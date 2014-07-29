@@ -376,7 +376,7 @@ prod_first(NonTerms, [Symbol|Rest], Acc0) ->
 
 new_test_() ->
   [?_assertMatch(#dfa{states = [#state{id = 0}|_]},
-                new(elx_grammar:new([{'A', [["a", "b"]]}], ['A'])))
+                new(elx_grammar:new([{'A', [["a", "b"]]}], ['A'], [])))
   ].
 
 first_test_() ->

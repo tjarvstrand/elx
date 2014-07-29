@@ -125,7 +125,7 @@ set_stack(Engine, Stack)    -> Engine#engine{stack = Stack}.
 
 eof_test_() ->
   [?_assertMatch({error, {syntax_error, {_, '$', eof}}},
-                 run(elx_grammar:new([{'S', ["foo", "bar"]}], ['S']),
+                 run(elx_grammar:new([{'S', ["foo", "bar"]}], ['S'], []),
                      'S',
                      ["foo"]))
   ].
@@ -134,22 +134,24 @@ run_test_() ->
   [?_assertEqual({ok, ["foo"]},
                  run(elx_grammar:new([{'S', ['E']},
                                       {'E', ["foo"]}],
-                                     ['S']),
+                                     ['S'],
+                                     []),
                      'S',
                      ["foo"])),
    ?_assertEqual({ok, ["foo+foo"]},
                  run(elx_grammar:new(
                        [{'S', ['E', "+", 'E'], fun(A) -> lists:concat(A) end},
                         {'E', ["foo"]}],
-                       ['S']),
+                       ['S'],
+                       []),
                      'S',
                      ["foo", "+", "foo"])),
    ?_assertMatch({error, {syntax_error, {_, "bar", {unexpected_token, "bar"}}}},
-                 run(elx_grammar:new([{'S', ["foo"]}], ['S']),
+                 run(elx_grammar:new([{'S', ["foo"]}], ['S'], []),
                      'S',
                      ["foo", "bar"])),
    ?_assertError({not_start_symbol, 'A'},
-                 run(elx_grammar:new([{'S', [["foo"]]}], ['S']), 'A', []))
+                 run(elx_grammar:new([{'S', [["foo"]]}], ['S'], []), 'A', []))
   ].
 
 %%%_* Test helpers =============================================================

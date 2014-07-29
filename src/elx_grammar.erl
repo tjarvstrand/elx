@@ -27,8 +27,9 @@
 
 %%%_* Exports ==================================================================
 -export([action/3,
-         new/2,
+         new/3,
          productions/1,
+         rule_precedence/2,
          start_symbols/1,
          symbol_to_start_symbol/1]).
 
@@ -44,7 +45,10 @@
 %%%_* Defines ==================================================================
 
 -record(grammar, {rules         :: [rule()],
-                  start_symbols :: [non_term_symbol()]}).
+                  start_symbols :: [non_term_symbol()],
+                  precedence    :: [{non_term_symbol(),
+                                     associativity(),
+                                     precedence()}]}).
 
 %%%_* Types ====================================================================
 
@@ -56,6 +60,8 @@
 -type symbol()          :: non_term_symbol() | term_symbol().
 -type non_term_symbol() :: atom().
 -type term_symbol()     :: string().
+-type associativity()   :: left | right | nonassoc.
+-type precedence()      :: pos_integer().
 
 
 %%%_* API ======================================================================
@@ -75,14 +81,16 @@ action(#grammar{rules = Rules}, Rule, Tokens) ->
 
 %%------------------------------------------------------------------------------
 %% @doc Return a new grammar() instance.
--spec new(Rules :: [{non_term_symbol(), [[symbol()]], fun()}],
+-spec new(Rules        :: [{non_term_symbol(), [[symbol()]], fun()}],
+          OpPrecedence :: [{symbol(), associativity()}],
           StartSymbols :: [non_term_symbol()]) -> grammar().
 %%------------------------------------------------------------------------------
-new(Rules, [_|_] = StartSymbols) ->
+new(Rules, [_|_] = StartSymbols, Precedence) ->
   #grammar{rules         = lists:map(fun new_rule/1,
                                      start_rules(StartSymbols) ++ Rules),
-           start_symbols = StartSymbols};
-new(_, _) ->
+           start_symbols = StartSymbols,
+           precedence    = precedences(Precedence)};
+new(_Rules, _StartSymbols, _Precedence) ->
   erlang:error(no_start_state).
 
 
@@ -94,6 +102,32 @@ new(_, _) ->
 %%------------------------------------------------------------------------------
 productions(#grammar{rules = Rules}) ->
   [Production || {Production, _Action} <- Rules].
+
+%%------------------------------------------------------------------------------
+%% @doc Return the precedence of Rule if defined.
+-spec rule_precedence(Grammar :: grammar(),
+                      Rule    :: rule()) ->
+                         {associativity(), precedence()} |
+                         undefined.
+%%------------------------------------------------------------------------------
+rule_precedence(Grammar, Rule) ->
+  case rule_last_term_symbol(Rule) of
+    {ok, Terminal}    -> term_symbol_precedence(Grammar, Terminal);
+    {error, notfound} -> undefined
+  end.
+
+%%------------------------------------------------------------------------------
+%% @doc Return the precedence of Terminal if defined.
+-spec term_symbol_precedence(Grammar  :: grammar(),
+                             Terminal :: term_symbol()) ->
+                             precedence() | undefined.
+%%------------------------------------------------------------------------------
+term_symbol_precedence(#grammar{precedence = PrecDecls}, Terminal) ->
+  case lists:keyfind(Terminal, 1, PrecDecls) of
+    {Terminal, Assoc, Prec} -> {Assoc, Prec};
+    false                   -> undefined
+  end.
+
 
 %%------------------------------------------------------------------------------
 %% @doc Return Symbol converted to a valid start symbol Grammar.
@@ -111,6 +145,19 @@ start_symbols(#grammar{start_symbols = Start}) ->
 
 %%%_* Internal functions =======================================================
 
+rule_last_term_symbol({_L, R}) ->
+  do_last_terminal_symbol(lists:reverse(R)).
+
+do_last_terminal_symbol([])                    -> {error, notfound};
+do_last_terminal_symbol([S|_]) when is_list(S) -> {ok, S};
+do_last_terminal_symbol([_|Rest])              -> do_last_terminal_symbol(Rest).
+
+precedences(PrecedenceDecls) ->
+  lists:zipwith(fun({Symbol, Assoc}, Prec) -> {Symbol, Assoc, Prec} end,
+                PrecedenceDecls,
+                lists:seq(1, length(PrecedenceDecls))).
+
+
 start_rules(Symbols) ->
   [{symbol_to_start_symbol(S), [S, '$']} || S <- Symbols].
 
@@ -125,20 +172,22 @@ new_rule({L, Rs, A}) ->
 %%%_* Tests ====================================================================
 
 new_test_() ->
-  [?_assertError({illegal_non_terminal, '.'}, new([{'.', [["b"]]}], ['.']))
+  [?_assertError({illegal_non_terminal, '.'}, new([{'.', [["b"]]}], ['.'], []))
   ].
 
 
 start_symbols_test_() ->
-  [?_assertEqual(['A', 'B'], start_symbols(new([], ['A', 'B']))),
-   ?_assertError(no_start_state, start_symbols(new([], [])))
+  [?_assertEqual(['A', 'B'], start_symbols(new([], ['A', 'B'], []))),
+   ?_assertError(no_start_state, start_symbols(new([], [], [])))
   ].
 
 productions_test_() ->
   {setup,
    fun() ->
        new([{'A', ["b", "c"]},
-            {'A', ["d"]}], ['A'])
+            {'A', ["d"]}],
+           ['A'],
+          [])
    end,
    fun(Grammar) ->
        [?_assertEqual([{'A\'', ['A', '$']},
@@ -152,12 +201,31 @@ action_test_() ->
    fun() ->
        new([{'A', [], fun([I]) -> "action_"  ++ integer_to_list(I) end},
             {'B', []}],
-          ['A'])
+           ['A'],
+          [])
    end,
    fun(Grammar) ->
        [?_assertEqual("action_1",action(Grammar, {'A', []}, [1])),
         ?_assertEqual("action_2",action(Grammar, {'B', []}, ["action_2"]))]
    end}.
+
+precedences_test_() ->
+  {setup,
+   fun() ->
+       new([{'A', []},
+            {'A', ["a", 'B']},
+            {'A', ["c", 'B']},
+            {'B', []}],
+           ['A'],
+          [{"a", left}])
+   end,
+   fun(Grammar) ->
+       [?_assertEqual(undefined, rule_precedence(Grammar, {'B', []})),
+        ?_assertEqual({left, 1}, rule_precedence(Grammar, {'A', ["a", 'B']})),
+        ?_assertEqual(undefined, rule_precedence(Grammar, {'A', ["c", 'B']}))
+       ]
+   end}.
+
 
 %%%_* Test helpers =============================================================
 %%%_* Emacs ====================================================================
