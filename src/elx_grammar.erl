@@ -34,10 +34,15 @@
          symbol_to_start_symbol/1]).
 
 -export_type([grammar/0,
+              rule/0,
               production/0,
+              symbol/0,
               term_symbol/0,
               non_term_symbol/0,
-              symbol/0]).
+              action/0,
+
+              associativity/0,
+              precedence/0]).
 
 %%%_* Includes =================================================================
 -include_lib("eunit/include/eunit.hrl").
@@ -81,7 +86,7 @@ action(#grammar{rules = Rules}, Rule, Tokens) ->
 
 %%------------------------------------------------------------------------------
 %% @doc Return a new grammar() instance.
--spec new(Rules        :: [{non_term_symbol(), [[symbol()]], fun()}],
+-spec new(Rules        :: rule(),
           OpPrecedence :: [{symbol(), associativity()}],
           StartSymbols :: [non_term_symbol()]) -> grammar().
 %%------------------------------------------------------------------------------
@@ -106,7 +111,7 @@ productions(#grammar{rules = Rules}) ->
 %%------------------------------------------------------------------------------
 %% @doc Return the precedence of Rule if defined.
 -spec rule_precedence(Grammar :: grammar(),
-                      Rule    :: rule()) ->
+                      Rule    :: production()) ->
                          {associativity(), precedence()} |
                          undefined.
 %%------------------------------------------------------------------------------
