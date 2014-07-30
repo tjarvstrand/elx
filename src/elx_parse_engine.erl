@@ -93,30 +93,43 @@ action(Engine, Symbol) ->
   elx_dfa:action(dfa(Engine), state(Engine), Symbol).
 
 shift(State, Engine, [Token|Rest]) ->
-  {ok, {push_stack_token(Engine, Token, State), Rest}}.
+  {ok, {push_stack(Engine, Token, State), Rest}}.
 
 reduce({NonTerm, Symbols} = Rule, Engine0, Tokens) ->
   {Popped, Engine} = pop_stack(Engine0, length(Symbols)),
   case action(Engine, NonTerm) of
     {goto, NewState} ->
-      Token0 = case Popped of
-                [] ->
-                  elx:token(undefined,
-                            undefined,
-                            NonTerm,
-                            undefined,
-                            undefined);
-                _ ->
-                  elx:token(undefined,
-                            elx:token_value(hd(Popped)),
-                            NonTerm,
-                            elx:token_start(hd(Popped)),
-                            elx:token_end(lists:last(Popped)))
-              end,
+      Token0 = create_parent_token(NonTerm, Popped),
       Token = elx_grammar:action(grammar(Engine0), Rule, Token0),
-      {ok, {push_stack_token(Engine, Token, NewState), Tokens}};
+      {ok, {push_stack(Engine, Token, NewState), Tokens}};
     {error, _} ->
       erlang:error({inconsistent_grammar, {reduce, Rule, Engine0}})
+  end.
+
+create_parent_token(NonTerm, Children) ->
+  Value = parent_token_value(Children),
+  Start = parent_token_start(Children),
+  End   = parent_token_end(Children),
+  elx:token(undefined, Value, NonTerm, Start, End).
+
+parent_token_value([])        -> undefined;
+parent_token_value([Child|_]) -> elx:token_value(Child).
+
+parent_token_start([]) -> undefined;
+parent_token_start([Child|Children]) ->
+  case elx:token_start(Child) of
+    undefined -> parent_token_start(Children);
+    Start     -> Start
+  end.
+
+parent_token_end(Children) ->
+  do_parent_token_end(lists:reverse(Children)).
+
+do_parent_token_end([]) -> undefined;
+do_parent_token_end([Child|Children]) ->
+  case elx:token_end(Child) of
+    undefined -> parent_token_end(Children);
+    End       -> End
   end.
 
 new(Grammar)         -> #engine{grammar = Grammar, dfa = elx_dfa:new(Grammar)}.
@@ -129,7 +142,7 @@ pop_stack(Engine, N) ->
   {Popped, Stack} = lists:split(N, stack(Engine)),
   {[T || {T, _} <- Popped], set_stack(Engine, Stack)}.
 
-push_stack_token(Engine, Token, State) ->
+push_stack(Engine, Token, State) ->
   set_stack(Engine, [{Token, State}|stack(Engine)]).
 
 init_stack(Engine, StateId) -> set_stack(Engine, [{undefined, StateId}]).
@@ -145,7 +158,8 @@ eof_test_() ->
   ].
 
 run_test_() ->
-  [?_assertEqual({ok, [elx:token(undefined,
+  [% Parse one token
+   ?_assertEqual({ok, [elx:token(undefined,
                                  undefined,
                                  'S',
                                  elx:point(1, 1, 1),
@@ -156,6 +170,7 @@ run_test_() ->
                                      []),
                      'S',
                      [elx:token(undefined, undefined, "foo")])),
+   % Parse several tokens.
    ?_assertEqual({ok, [elx:token(undefined,
                                  undefined,
                                  'S',
@@ -170,6 +185,36 @@ run_test_() ->
                      [elx:token(undefined, undefined, "foo"),
                       elx:token(undefined, undefined, "+"),
                       elx:token(undefined, undefined, "foo")])),
+   % Test that parent start/end is correct when second E is empty,
+   ?_assertEqual({ok, [elx:token(undefined,
+                                 undefined,
+                                 'S',
+                                 elx:point(1, 1, 1),
+                                 elx:point(4, 1, 4))]},
+                 run(elx_grammar:new(
+                       [{'S', ['E', "+", 'E'], fun(A) -> A end},
+                        {'E', ["foo"]},
+                        {'E', []}],
+                       ['S'],
+                       []),
+                     'S',
+                     [elx:token(undefined, undefined, "foo"),
+                      elx:token(undefined, undefined, "+")])),
+   % Test that parent start/end is correct when first E is empty,
+   ?_assertEqual({ok, [elx:token(undefined,
+                                 undefined,
+                                 'S',
+                                 elx:point(1, 1, 1),
+                                 elx:point(4, 1, 4))]},
+                 run(elx_grammar:new(
+                       [{'S', ['E', "+", 'E'], fun(A) -> A end},
+                        {'E', ["foo"]},
+                        {'E', []}],
+                       ['S'],
+                       []),
+                     'S',
+                     [elx:token(undefined, undefined, "+"),
+                      elx:token(undefined, undefined, "foo")])),
    ?_assertMatch({error, {syntax_error, {_, _, {unexpected_token,  "bar"}}}},
                  run(elx_grammar:new([{'S', ["foo"]}], ['S'], []),
                      'S',
@@ -178,6 +223,19 @@ run_test_() ->
    ?_assertError({not_start_symbol, 'A'},
                  run(elx_grammar:new([{'S', [["foo"]]}], ['S'], []), 'A', []))
   ].
+
+inconsistency_test_() ->
+  {setup,
+   fun() ->
+       push_stack(new(elx_grammar:new([{'A', []}], ['A'], [])), undefined, 0)
+   end,
+   fun(Engine) ->
+       [?_assertError({inconsistent_grammar,
+                       {reduce, {'B', []}, Engine}},
+                      reduce({'B', []}, Engine, []))
+       ]
+   end
+  }.
 
 %%%_* Test helpers =============================================================
 %%%_* Emacs ====================================================================

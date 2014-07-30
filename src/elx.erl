@@ -78,7 +78,7 @@
 %% A point is between two characters in a file. Points are 1-based so the first
 %% point (1,1,1) is before the first characbter, the second (usually 2,1,2)
 %% unless the first character is a newline) is after the first character,
-%% (3,1,3) is after the last etc.
+%% (3,1,3) is after the next etc.
 -type point() :: {Position :: pos_integer(),
                   Column   :: pos_integer(),
                   Line     :: pos_integer()}.
