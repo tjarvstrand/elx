@@ -26,7 +26,7 @@
 -module(elx).
 
 %%%_* Exports ==================================================================
--export([set_token_chars/2,
+-export([set_token_symbol/2,
          set_token_children/2,
          set_token_end/2,
          set_token_meta/2,
@@ -39,7 +39,7 @@
          token/5,
          token/6,
          token/7,
-         token_chars/1,
+         token_symbol/1,
          token_children/1,
          token_end/1,
          token_meta/1,
@@ -52,7 +52,11 @@
          point_shift/2]).
 
 -export_type([point/0,
-              token/0]).
+              token/0,
+
+             symbol/0,
+             non_term_symbol/0,
+             term_symbol/0]).
 
 %%%_* Includes =================================================================
 
@@ -62,7 +66,7 @@
 
 -record(token, {value          :: term(),
                 type           :: term(),
-                chars          :: string(),
+                symbol          :: string(),
                 start          :: point(),
                 'end'          :: point(),
                 children  = [] :: [token()],
@@ -84,6 +88,11 @@
 %% end point is the point() just after its last character.
 -type token() :: #token{}.
 
+-type symbol()          :: non_term_symbol() | term_symbol().
+-type non_term_symbol() :: atom().
+-type term_symbol()     :: string().
+
+
 %%%_* API ======================================================================
 
 %%------------------------------------------------------------------------------
@@ -94,59 +103,59 @@ token() ->
     token(undefined, undefined, []).
 
 %%------------------------------------------------------------------------------
-%% @equiv token(Type, Value, Chars, point()).
+%% @equiv token(Type, Value, Symbol, point()).
 -spec token(Type     :: term(),
             Value    :: term(),
-            Chars    :: string()) -> token().
+            Symbol   :: symbol()) -> token().
 %%------------------------------------------------------------------------------
-token(Type, Value, Chars) ->
-    token(Type, Value, Chars, point()).
+token(Type, Value, Symbol) ->
+    token(Type, Value, Symbol, point()).
 
 %%------------------------------------------------------------------------------
-%% @equiv token(Type, Value, Chars, Point, point_shift(Point, Chars)).
+%% @equiv token(Type, Value, Symbol, Point, point_shift(Point, Symbol)).
 -spec token(Type     :: term(),
             Value    :: term(),
-            Chars    :: string(),
+            Symbol   :: symbol(),
             Start    :: point()) -> token().
 %%------------------------------------------------------------------------------
-token(Type, Value, Chars, Start) ->
-    token(Type, Value, Chars, Start, point_shift(Start, Chars)).
+token(Type, Value, Symbol, Start) ->
+    token(Type, Value, Symbol, Start, point_shift(Start, Symbol)).
 
 %%------------------------------------------------------------------------------
-%% @equiv token(Type, Value, Chars, Start, End, []).
+%% @equiv token(Type, Value, Symbol, Start, End, []).
 -spec token(Type     :: term(),
             Value    :: term(),
-            Chars    :: string(),
+            Symbol   :: string(),
             Start    :: point(),
             End      :: point()) -> token().
 %%------------------------------------------------------------------------------
-token(Type, Value, Chars, Start, End) ->
-    token(Type, Value, Chars, Start, End, []).
+token(Type, Value, Symbol, Start, End) ->
+    token(Type, Value, Symbol, Start, End, []).
 
 %%------------------------------------------------------------------------------
-%% @equiv token(Type, Value, Chars, Start, End, Children, []).
+%% @equiv token(Type, Value, Symbol, Start, End, Children, []).
 -spec token(Type     :: term(),
             Value    :: term(),
-            Chars    :: string(),
+            Symbol    :: string(),
             Start    :: point(),
             End      :: point(),
             Children :: [token()]) -> token().
 %%------------------------------------------------------------------------------
-token(Type, Value, Chars, Start, End, Children) ->
-    token(Type, Value, Chars, Start, End, Children, []).
+token(Type, Value, Symbol, Start, End, Children) ->
+    token(Type, Value, Symbol, Start, End, Children, []).
 
 %%------------------------------------------------------------------------------
 %% @doc Returns a new token.
 -spec token(Type     :: term(),
             Value    :: term(),
-            Chars    :: string(),
+            Symbol   :: symbol(),
             Start    :: point(),
             End      :: point(),
             Children :: [token()],
             Meta     :: term()) -> token().
 %%------------------------------------------------------------------------------
-token(Type, Value, Chars, Start, End, Children, Meta) ->
-    #token{chars = Chars,
+token(Type, Value, Symbol, Start, End, Children, Meta) ->
+    #token{symbol = Symbol,
            type = Type,
            value = Value,
            start = Start,
@@ -157,9 +166,9 @@ token(Type, Value, Chars, Start, End, Children, Meta) ->
 
 %%------------------------------------------------------------------------------
 %% @doc Returns Token's string representation.
--spec token_chars(Token :: token()) -> string().
+-spec token_symbol(Token :: token()) -> symbol().
 %%------------------------------------------------------------------------------
-token_chars(Token) -> Token#token.chars.
+token_symbol(Token) -> Token#token.symbol.
 
 %%------------------------------------------------------------------------------
 %% @doc Returns the list Token's child tokens.
@@ -200,9 +209,9 @@ token_meta(Token) -> Token#token.meta.
 
 %%------------------------------------------------------------------------------
 %% @doc Returns Token's string representation.
--spec set_token_chars(Token :: token(), Chars :: string()) -> token().
+-spec set_token_symbol(Token :: token(), Symbol :: symbol()) -> token().
 %%------------------------------------------------------------------------------
-set_token_chars(Token, Chars) -> Token#token{chars = Chars}.
+set_token_symbol(Token, Symbol) -> Token#token{symbol = Symbol}.
 
 %%------------------------------------------------------------------------------
 %% @doc Returns the list Token's child tokens.

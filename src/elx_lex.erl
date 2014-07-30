@@ -634,7 +634,7 @@ debug_test() ->
 %%%_* Test helpers =============================================================
 
 test_chars({{token, Token}, Rest}) ->
-  {elx:token_chars(Token), Rest}.
+  {elx:token_symbol(Token), Rest}.
 
 dummy_token() ->
   dummy_token(0).
