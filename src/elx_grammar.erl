@@ -192,7 +192,9 @@ new_rule({L, Rs}) ->
   new_rule({L, Rs, fun(Token) ->
                        case elx:token_children(Token) of
                          []       -> Token;
-                         Children -> elx:set_token_value(Token, hd(Children))
+                         Children ->
+                           Value = elx:token_value(hd(Children)),
+                           elx:set_token_value(Token, Value)
                        end
                    end});
 new_rule({L, Rs, A}) ->
@@ -251,7 +253,25 @@ action_test_() ->
                                elx:point()),
                       action(Grammar,
                              {'B', []},
-                             elx:token()))
+                             elx:token())),
+        ?_assertEqual(elx:token(undefined,
+                               a_value,
+                               [],
+                               elx:point(),
+                               elx:point(),
+                               [elx:token(undefined,
+                                          a_value,
+                                          undefined,
+                                          undefined,
+                                          undefined)]),
+                      action(Grammar,
+                             {'B', []},
+                             elx:set_token_children(elx:token(),
+                                                    [elx:token(undefined,
+                                                              a_value,
+                                                              undefined,
+                                                              undefined,
+                                                              undefined)])))
         ]
    end}.
 
