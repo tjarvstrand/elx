@@ -28,6 +28,7 @@
 %%%_* Exports ==================================================================
 -export([action/3,
          new/3,
+         precedence_lvl_associativity/2,
          productions/1,
          rule_precedence/2,
          start_symbols/1,
@@ -42,18 +43,18 @@
               action/0,
 
               associativity/0,
-              precedence/0]).
+              precedence_lvl/0]).
 
 %%%_* Includes =================================================================
 -include_lib("eunit/include/eunit.hrl").
 
 %%%_* Defines ==================================================================
 
--record(grammar, {rules         :: [rule()],
-                  start_symbols :: [non_term_symbol()],
-                  precedence    :: [{non_term_symbol(),
+-record(grammar, {rules           :: [rule()],
+                  start_symbols   :: [non_term_symbol()],
+                  precedence_lvls :: [{precedence_lvl(),
                                      associativity(),
-                                     precedence()}]}).
+                                     [non_term_symbol()]}]}).
 
 %%%_* Types ====================================================================
 
@@ -66,7 +67,7 @@
 -type non_term_symbol() :: atom().
 -type term_symbol()     :: string().
 -type associativity()   :: left | right | nonassoc.
--type precedence()      :: pos_integer().
+-type precedence_lvl()  :: pos_integer().
 
 
 %%%_* API ======================================================================
@@ -87,14 +88,14 @@ action(#grammar{rules = Rules}, Rule, Tokens) ->
 %%------------------------------------------------------------------------------
 %% @doc Return a new grammar() instance.
 -spec new(Rules        :: rule(),
-          OpPrecedence :: [{symbol(), associativity()}],
+          OpPrecedence :: [{associativity(), [symbol()]}],
           StartSymbols :: [non_term_symbol()]) -> grammar().
 %%------------------------------------------------------------------------------
-new(Rules, [_|_] = StartSymbols, Precedence) ->
-  #grammar{rules         = lists:map(fun new_rule/1,
-                                     start_rules(StartSymbols) ++ Rules),
-           start_symbols = StartSymbols,
-           precedence    = precedences(Precedence)};
+new(Rules, [_|_] = StartSymbols, PrecedenceDecls) ->
+  #grammar{rules           = lists:map(fun new_rule/1,
+                                       start_rules(StartSymbols) ++ Rules),
+           start_symbols   = StartSymbols,
+           precedence_lvls = precedence(PrecedenceDecls)};
 new(_Rules, _StartSymbols, _Precedence) ->
   erlang:error(no_start_state).
 
@@ -111,9 +112,7 @@ productions(#grammar{rules = Rules}) ->
 %%------------------------------------------------------------------------------
 %% @doc Return the precedence of Rule if defined.
 -spec rule_precedence(Grammar :: grammar(),
-                      Rule    :: production()) ->
-                         {associativity(), precedence()} |
-                         undefined.
+                      Rule    :: production()) -> precedence_lvl() | undefined.
 %%------------------------------------------------------------------------------
 rule_precedence(Grammar, Rule) ->
   case rule_last_term_symbol(Rule) of
@@ -125,12 +124,21 @@ rule_precedence(Grammar, Rule) ->
 %% @doc Return the precedence of Terminal if defined.
 -spec term_symbol_precedence(Grammar  :: grammar(),
                              Terminal :: term_symbol()) ->
-                             precedence() | undefined.
+                             precedence_lvl() | undefined.
 %%------------------------------------------------------------------------------
-term_symbol_precedence(#grammar{precedence = PrecDecls}, Terminal) ->
-  case lists:keyfind(Terminal, 1, PrecDecls) of
-    {Terminal, Assoc, Prec} -> {Assoc, Prec};
-    false                   -> undefined
+term_symbol_precedence(#grammar{precedence_lvls = PrecLvls}, Terminal) ->
+  do_term_symbol_precedence(PrecLvls, Terminal).
+
+%%------------------------------------------------------------------------------
+%% @doc Return the associativity of PrecLvl
+-spec precedence_lvl_associativity(Grammar :: grammar(),
+                                   PrecLvl :: precedence_lvl()) ->
+                                      {ok, associativity()} | {error, notfound}.
+%%------------------------------------------------------------------------------
+precedence_lvl_associativity(#grammar{precedence_lvls = PrecLvls}, PrecLvl) ->
+  case lists:keyfind(PrecLvl, 1, PrecLvls) of
+    {PrecLvl, Assoc, _Symbols} -> Assoc;
+    false                      -> {error, notfound}
   end.
 
 
@@ -157,10 +165,21 @@ do_last_terminal_symbol([])                    -> {error, notfound};
 do_last_terminal_symbol([S|_]) when is_list(S) -> {ok, S};
 do_last_terminal_symbol([_|Rest])              -> do_last_terminal_symbol(Rest).
 
-precedences(PrecedenceDecls) ->
-  lists:zipwith(fun({Symbol, Assoc}, Prec) -> {Symbol, Assoc, Prec} end,
-                PrecedenceDecls,
-                lists:seq(1, length(PrecedenceDecls))).
+do_term_symbol_precedence([], _Terminal) ->
+  undefined;
+do_term_symbol_precedence([{Prec, _Assoc, Symbols}|Lvls], Terminal) ->
+  case lists:member(Terminal, Symbols) of
+    true  -> Prec;
+    false -> do_term_symbol_precedence(Lvls, Terminal)
+  end.
+
+precedence(PrecedenceDecls) ->
+  % If precedence for a symbol is declared more than once, we will choose the
+  % highest declared precedence.
+  lists:reverse(
+    lists:zipwith(fun({Assoc, Symbols}, Prec) -> {Prec, Assoc, Symbols} end,
+                  PrecedenceDecls,
+                  lists:seq(1, length(PrecedenceDecls)))).
 
 
 start_rules(Symbols) ->
@@ -222,12 +241,15 @@ precedences_test_() ->
             {'A', ["c", 'B']},
             {'B', []}],
            ['A'],
-          [{"a", left}])
+          [{right, ["a"]}])
    end,
    fun(Grammar) ->
        [?_assertEqual(undefined, rule_precedence(Grammar, {'B', []})),
-        ?_assertEqual({left, 1}, rule_precedence(Grammar, {'A', ["a", 'B']})),
-        ?_assertEqual(undefined, rule_precedence(Grammar, {'A', ["c", 'B']}))
+        ?_assertEqual(1, rule_precedence(Grammar, {'A', ["a", 'B']})),
+        ?_assertEqual(undefined, rule_precedence(Grammar, {'A', ["c", 'B']})),
+        ?_assertEqual(right, precedence_lvl_associativity(Grammar, 1)),
+        ?_assertEqual({error, notfound},
+                      precedence_lvl_associativity(Grammar, 2))
        ]
    end}.
 
