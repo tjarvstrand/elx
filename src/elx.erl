@@ -54,9 +54,9 @@
 -export_type([point/0,
               token/0,
 
-             symbol/0,
-             non_term_symbol/0,
-             term_symbol/0]).
+              symbol/0,
+              non_term_symbol/0,
+              term_symbol/0]).
 
 %%%_* Includes =================================================================
 
@@ -100,7 +100,7 @@
 -spec token() -> token().
 %%------------------------------------------------------------------------------
 token() ->
-    token(undefined, undefined, []).
+  token(undefined, undefined, []).
 
 %%------------------------------------------------------------------------------
 %% @equiv token(Type, Value, Symbol, point()).
@@ -109,7 +109,7 @@ token() ->
             Symbol   :: symbol()) -> token().
 %%------------------------------------------------------------------------------
 token(Type, Value, Symbol) ->
-    token(Type, Value, Symbol, point()).
+  token(Type, Value, Symbol, point()).
 
 %%------------------------------------------------------------------------------
 %% @equiv token(Type, Value, Symbol, Point, point_shift(Point, Symbol)).
@@ -119,7 +119,7 @@ token(Type, Value, Symbol) ->
             Start    :: point()) -> token().
 %%------------------------------------------------------------------------------
 token(Type, Value, Symbol, Start) ->
-    token(Type, Value, Symbol, Start, point_shift(Start, Symbol)).
+  token(Type, Value, Symbol, Start, point_shift(Start, Symbol)).
 
 %%------------------------------------------------------------------------------
 %% @equiv token(Type, Value, Symbol, Start, End, []).
@@ -130,7 +130,7 @@ token(Type, Value, Symbol, Start) ->
             End      :: point()) -> token().
 %%------------------------------------------------------------------------------
 token(Type, Value, Symbol, Start, End) ->
-    token(Type, Value, Symbol, Start, End, []).
+  token(Type, Value, Symbol, Start, End, []).
 
 %%------------------------------------------------------------------------------
 %% @equiv token(Type, Value, Symbol, Start, End, Children, []).
@@ -142,7 +142,7 @@ token(Type, Value, Symbol, Start, End) ->
             Children :: [token()]) -> token().
 %%------------------------------------------------------------------------------
 token(Type, Value, Symbol, Start, End, Children) ->
-    token(Type, Value, Symbol, Start, End, Children, []).
+  token(Type, Value, Symbol, Start, End, Children, []).
 
 %%------------------------------------------------------------------------------
 %% @doc Returns a new token.
@@ -155,14 +155,14 @@ token(Type, Value, Symbol, Start, End, Children) ->
             Meta     :: term()) -> token().
 %%------------------------------------------------------------------------------
 token(Type, Value, Symbol, Start, End, Children, Meta) ->
-    #token{symbol = Symbol,
-           type = Type,
-           value = Value,
-           start = Start,
-           'end' = End,
-           children = Children,
-           meta = Meta
-          }.
+  #token{symbol = Symbol,
+         type = Type,
+         value = Value,
+         start = Start,
+         'end' = End,
+         children = Children,
+         meta = Meta
+        }.
 
 %%------------------------------------------------------------------------------
 %% @doc Returns Token's string representation.
@@ -273,18 +273,69 @@ point(Pos, Line, Col) ->
 point_shift(Point, String) ->
   Lines = re:split(String, "\\R", [bsr_unicode, {return, list}]),
   point_incr(Point,
-        length(String),
-        length(Lines) - 1,
-        length(lists:last(Lines))).
+             length(String),
+             length(Lines) - 1,
+             length(lists:last(Lines))).
 
 
 
 point_incr({Pos, Line, Col}, IncrPos, 0, IncrCol) ->
-    {Pos + IncrPos, Line, Col + IncrCol};
+  {Pos + IncrPos, Line, Col + IncrCol};
 point_incr({Pos, Line, _Col}, IncrPos, IncrLine, IncrCol) ->
-    {Pos + IncrPos, Line + IncrLine, IncrCol + 1}.
+  {Pos + IncrPos, Line + IncrLine, IncrCol + 1}.
 
 %%%_* Tests ====================================================================
+
+new_test_() ->
+  [?_assertMatch(#token{}, token())
+  ].
+
+token_get_test_() ->
+  {setup,
+   fun() ->
+       token(type, value, symbol, start, 'end', children, meta)
+   end,
+   fun(Token) ->
+       [?_assertEqual(type, token_type(Token)),
+        ?_assertEqual(value, token_value(Token)),
+        ?_assertEqual(symbol, token_symbol(Token)),
+        ?_assertEqual(start, token_start(Token)),
+        ?_assertEqual('end', token_end(Token)),
+        ?_assertEqual(children, token_children(Token)),
+        ?_assertEqual(meta, token_meta(Token))
+       ]
+   end
+  }.
+
+
+token_set_test_() ->
+  {setup,
+   fun() ->
+       token(type, value, symbol, start, 'end', children, meta)
+   end,
+   fun(Token) ->
+       [?_assertEqual(type_1, token_type(set_token_type(Token, type_1))),
+        ?_assertEqual(value_1, token_value(set_token_value(Token, value_1))),
+        ?_assertEqual(symbol_1,
+                      token_symbol(set_token_symbol(Token, symbol_1))),
+        ?_assertEqual(start_1, token_start(set_token_start(Token, start_1))),
+        ?_assertEqual(end_1, token_end(set_token_end(Token, end_1))),
+        ?_assertEqual(children_1,
+                      token_children(set_token_children(Token, children_1))),
+        ?_assertEqual(meta_1, token_meta(set_token_meta(Token, meta_1)))
+       ]
+   end
+  }.
+
+point_incr_test_() ->
+  [?_assertEqual(point(2, 1, 2), point_incr(point(), 1, 0, 1)),
+   ?_assertEqual(point(2, 2, 5), point_incr(point(), 1, 1, 4))
+  ].
+
+point_shift_test_() ->
+  [?_assertEqual(point(4, 1, 4), point_shift(point(), "foo")),
+   ?_assertEqual(point(5, 2, 2), point_shift(point(), "fo\no"))
+  ].
 
 %%%_* Test helpers =============================================================
 
