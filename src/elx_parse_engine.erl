@@ -110,7 +110,7 @@ create_parent_token(NonTerm, Children) ->
   Value = parent_token_value(Children),
   Start = parent_token_start(Children),
   End   = parent_token_end(Children),
-  elx:token(undefined, Value, NonTerm, Start, End).
+  elx:token(NonTerm, Value, NonTerm, Start, End).
 
 parent_token_value([])        -> undefined;
 parent_token_value([Child|_]) -> elx:token_value(Child).
@@ -159,11 +159,9 @@ eof_test_() ->
 
 run_test_() ->
   [% Parse one token
-   ?_assertEqual({ok, [elx:token(undefined,
+   ?_assertEqual({ok, [elx:token('S',
                                  undefined,
-                                 'S',
-                                 elx:point(1, 1, 1),
-                                 elx:point(4, 1, 4))]},
+                                 'S')]},
                  run(elx_grammar:new([{'S', ['E']},
                                       {'E', ["foo"]}],
                                      ['S'],
@@ -171,11 +169,9 @@ run_test_() ->
                      'S',
                      [elx:token(undefined, undefined, "foo")])),
    % Parse several tokens.
-   ?_assertEqual({ok, [elx:token(undefined,
+   ?_assertEqual({ok, [elx:token('S',
                                  undefined,
-                                 'S',
-                                 elx:point(1, 1, 1),
-                                 elx:point(4, 1, 4))]},
+                                 'S')]},
                  run(elx_grammar:new(
                        [{'S', ['E', "+", 'E'], fun(A) -> A end},
                         {'E', ["foo"]}],
@@ -186,11 +182,9 @@ run_test_() ->
                       elx:token(undefined, undefined, "+"),
                       elx:token(undefined, undefined, "foo")])),
    % Test that parent start/end is correct when second E is empty,
-   ?_assertEqual({ok, [elx:token(undefined,
+   ?_assertEqual({ok, [elx:token('S',
                                  undefined,
-                                 'S',
-                                 elx:point(1, 1, 1),
-                                 elx:point(4, 1, 4))]},
+                                 'S')]},
                  run(elx_grammar:new(
                        [{'S', ['E', "+", 'E'], fun(A) -> A end},
                         {'E', ["foo"]},
@@ -201,11 +195,9 @@ run_test_() ->
                      [elx:token(undefined, undefined, "foo"),
                       elx:token(undefined, undefined, "+")])),
    % Test that parent start/end is correct when first E is empty,
-   ?_assertEqual({ok, [elx:token(undefined,
+   ?_assertEqual({ok, [elx:token('S',
                                  undefined,
-                                 'S',
-                                 elx:point(1, 1, 1),
-                                 elx:point(4, 1, 4))]},
+                                 'S')]},
                  run(elx_grammar:new(
                        [{'S', ['E', "+", 'E'], fun(A) -> A end},
                         {'E', ["foo"]},

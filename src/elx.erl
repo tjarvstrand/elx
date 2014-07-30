@@ -103,23 +103,23 @@ token() ->
   token(undefined, undefined, []).
 
 %%------------------------------------------------------------------------------
-%% @equiv token(Type, Value, Symbol, point()).
+%% @equiv token(Type, Value, Symbol, undefined).
 -spec token(Type     :: term(),
             Value    :: term(),
             Symbol   :: symbol()) -> token().
 %%------------------------------------------------------------------------------
 token(Type, Value, Symbol) ->
-  token(Type, Value, Symbol, point()).
+  token(Type, Value, Symbol, undefined).
 
 %%------------------------------------------------------------------------------
-%% @equiv token(Type, Value, Symbol, Point, point_shift(Point, Symbol)).
+%% @equiv token(Type, Value, Symbol, Point, undefined).
 -spec token(Type     :: term(),
             Value    :: term(),
             Symbol   :: symbol(),
             Start    :: point()) -> token().
 %%------------------------------------------------------------------------------
 token(Type, Value, Symbol, Start) ->
-  token(Type, Value, Symbol, Start, point_shift(Start, Symbol)).
+  token(Type, Value, Symbol, Start, undefined).
 
 %%------------------------------------------------------------------------------
 %% @equiv token(Type, Value, Symbol, Start, End, []).
