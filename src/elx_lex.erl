@@ -220,9 +220,6 @@ scan_string(String,  Grammar,  Offset, Opts, Tokens) ->
       Err
   end.
 
-next_token(String, Grammar, Offset) ->
-  next_token(String, Grammar, Offset, default_opts()).
-
 next_token(String, Grammar, Offset, Opts) ->
   case match_action(String, Grammar, Opts) of
     {ok, {{MatchStr, MatchGroups, Action}, Rest}} ->
@@ -489,19 +486,23 @@ next_token_test_() ->
    fun({Grammar1, Grammar2})->
        [
         ?_assertMatch({{skip, _}, _},
-                      next_token("foo", Grammar1, elx:point())),
+                      next_token("foo", Grammar1, elx:point(), default_opts())),
         ?_assertEqual({"123", "\nbar"},
                       test_chars(next_token("123\nbar",
                                             Grammar1,
-                                            elx:point()))),
+                                            elx:point(),
+                                            default_opts()))),
         ?_assertMatch({"\"foo\"", ""},
-                      test_chars(next_token("\"foo\"", Grammar1, elx:point()))),
+                      test_chars(next_token("\"foo\"",
+                                            Grammar1,
+                                            elx:point(),
+                                            default_opts()))),
         ?_assertEqual({error, {{something_illegal, "@"}, {{1, 1, 1}, "@"}}},
-                      next_token("@", Grammar1, elx:point())),
+                      next_token("@", Grammar1, elx:point(), default_opts())),
         ?_assertEqual({error, {syntax_error, {{1, 1, 1}, "Foo"}}},
-                      next_token("Foo", Grammar1, elx:point())),
+                      next_token("Foo", Grammar1, elx:point(), default_opts())),
         ?_assertError(badarg,
-                      next_token("foo", Grammar2, elx:point()))
+                      next_token("foo", Grammar2, elx:point(), default_opts()))
        ]
    end}.
 
