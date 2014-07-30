@@ -212,7 +212,7 @@ scan_string(String,  Grammar,  Offset, Opts, Tokens) ->
   case next_token(String, Grammar, Offset, Opts) of
     {{token, Token}, Rest} ->
       debug("Found token ~p", [Token], Opts),
-      NextPoint = point_incr(elx:token_end(Token), 1, 0, 1),
+      NextPoint = elx:point_incr(elx:token_end(Token), 1, 0, 1),
       scan_string(Rest, Grammar, NextPoint, Opts, [Token|Tokens]);
     {{skip, Token}, Rest} ->
       debug("Skipping token ~p", [Token], Opts),
@@ -324,11 +324,6 @@ compile_pattern(Pattern, PatternOpts, Opts) ->
     {error, Rsn} -> erlang:error(Rsn)
   end.
 
-point_incr({Pos, Line, Col}, IncrPos, 0, IncrCol) ->
-    {Pos + IncrPos, Line, Col + IncrCol};
-point_incr({Pos, Line, _Col}, IncrPos, IncrLine, IncrCol) ->
-    {Pos + IncrPos, Line + IncrLine, IncrCol + 1}.
-
 %%%_* Tests ====================================================================
 
 longest_match_test_() ->
@@ -339,10 +334,16 @@ longest_match_test_() ->
         {"a*", dummy_token(1)}]
    end,
    fun(Grammar) ->
-       [?_assertEqual({ok, [{dummy, aaa_1, "aaa", {1, 1, 1}, {3, 1, 3}}]},
-                      string("aaa", Grammar)),
-        ?_assertEqual({ok, [{dummy, aa_2, "aa", {1, 1, 1}, {2, 1, 2}}]},
-                      string("aa", Grammar))
+       [?_assertEqual([elx:token(dummy, aaa_1, "aaa", {1, 1, 1}, {3, 1, 3})],
+                      begin
+                        {ok, Tokens} = string("aaa", Grammar),
+                        Tokens
+                      end),
+        ?_assertEqual([elx:token(dummy, aa_2, "aa", {1, 1, 1}, {2, 1, 2})],
+                      begin
+                        {ok, Tokens} = string("aa", Grammar),
+                        Tokens
+                      end)
        ]
    end}.
 
@@ -353,10 +354,16 @@ multi_pattern_test_() ->
        [{{["foo", "bar"], [dotall]}, keyword_token()}]
    end,
    fun(Grammar) ->
-       [?_assertEqual({ok, [{keyword, foo, "foo", {1, 1, 1}, {3, 1, 3}}]},
-                      string("foo", Grammar)),
-        ?_assertEqual({ok, [{keyword, bar, "bar", {1, 1, 1}, {3, 1, 3}}]},
-                      string("bar", Grammar))
+       [?_assertEqual([elx:token(keyword, foo, "foo", {1, 1, 1}, {3, 1, 3})],
+                      begin
+                        {ok, Tokens} = string("foo", Grammar),
+                        Tokens
+                      end),
+        ?_assertEqual([elx:token(keyword, bar, "bar", {1, 1, 1}, {3, 1, 3})],
+                      begin
+                        {ok, Tokens} = string("bar", Grammar),
+                        Tokens
+                      end)
        ]
    end}.
 
@@ -386,13 +393,22 @@ string_test_() ->
         {"[A-Z]*", skip()}]
    end,
    fun(Grammar) ->
-       [?_assertEqual({ok, [{dummy, foo_2, "foo", {1, 1, 1}, {3, 1, 3}}]},
-                      string("foo", Grammar)),
-        ?_assertEqual({ok, [{dummy, foo_2,  "foo", {1, 1, 1}, {3, 1, 3}},
-                            {dummy, '12_1', "12",  {5, 1, 5}, {6, 1, 6}}]},
-                      string("foo 12", Grammar)),
-        ?_assertEqual({ok, [{dummy, foo_2, "foo", {5, 1, 5}, {7, 1, 7}}]},
-                      string("FOO foo", Grammar)),
+       [?_assertEqual([elx:token(dummy, foo_2, "foo", {1, 1, 1}, {3, 1, 3})],
+                      begin
+                        {ok, Tokens} = string("foo", Grammar),
+                        Tokens
+                      end),
+        ?_assertEqual([elx:token(dummy, foo_2,  "foo", {1, 1, 1}, {3, 1, 3}),
+                       elx:token(dummy, '12_1', "12",  {5, 1, 5}, {6, 1, 6})],
+                      begin
+                        {ok, Tokens} = string("foo 12", Grammar),
+                        Tokens
+                      end),
+        ?_assertEqual([elx:token(dummy, foo_2, "foo", {5, 1, 5}, {7, 1, 7})],
+                      begin
+                        {ok, Tokens} = string("FOO foo", Grammar),
+                        Tokens
+                      end),
         ?_assertEqual({ok, []},
                       string("FOO", Grammar))
        ]
@@ -439,10 +455,16 @@ string_newline_test_() ->
    end,
    fun(Grammar) ->
        [
-        ?_assertEqual({ok, [{dummy, foo_2, "foo", {1, 1, 1}, {3, 1, 3}}]},
-                      string("foo", Grammar)),
-        ?_assertEqual({ok, [{dummy, foo_2, "foo", {5, 2, 1}, {7, 2, 3}}]},
-                      string("FOO\nfoo", Grammar)),
+        ?_assertEqual([elx:token(dummy, foo_2, "foo", {1, 1, 1}, {3, 1, 3})],
+                      begin
+                        {ok, Tokens} = string("foo", Grammar),
+                        Tokens
+                      end),
+        ?_assertEqual([elx:token(dummy, foo_2, "foo", {5, 2, 1}, {7, 2, 3})],
+                      begin
+                        {ok, Tokens} = string("FOO\nfoo", Grammar),
+                        Tokens
+                      end),
         ?_assertEqual({ok, []},
                       string("FOO\n", Grammar)),
         ?_assertEqual({error, {syntax_error, {{1, 1, 1}, "@"}}},

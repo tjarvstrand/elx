@@ -27,6 +27,8 @@
 
 %%%_* Exports ==================================================================
 -export([token/5,
+         token/6,
+         token/7,
          token_chars/1,
          token_end/1,
          point/0,
@@ -43,41 +45,68 @@
 
 %%%_* Defines ==================================================================
 
+-record(token, {value          :: term(),
+                type           :: atom(),
+                chars          :: string(),
+                start          :: point(),
+                'end'          :: point(),
+                children  = [] :: [token()],
+                meta           :: term() % For use by the grammar author
+               }).
+
 %%%_* Types ====================================================================
 
--type point() :: {Position :: non_neg_integer(),
-                  Column   :: non_neg_integer(),
-                  Line     :: non_neg_integer()}.
+-type point() :: {Position :: pos_integer(),
+                  Column   :: pos_integer(),
+                  Line     :: pos_integer()}.
 
--type token()    :: {TokenTerm  :: term(),
-                     TokenChars :: string(),
-                     TokenStart :: point(),
-                     TokenEnd   :: point()}.
+-type token() :: #token{}.
 
 %%%_* API ======================================================================
 
 %%------------------------------------------------------------------------------
-%% @doc Returns a new token.
--spec token(Type  :: term(),
-            Term  :: term(),
-            Chars :: string(),
-            Start :: point(),
-            End   :: point()) -> token().
+%% @equiv token(Type, Value, Chars, Start, End, []).
 %%------------------------------------------------------------------------------
-token(Type, Term, Chars, Start, End) ->
-    {Type, Term, Chars, Start, End}.
+token(Type, Value, Chars, Start, End) ->
+    token(Type, Value, Chars, Start, End, []).
+
+%%------------------------------------------------------------------------------
+%% @equiv token(Type, Value, Chars, Start, End, Children, []).
+%%------------------------------------------------------------------------------
+token(Type, Value, Chars, Start, End, Children) ->
+    token(Type, Value, Chars, Start, End, Children, []).
+
+%%------------------------------------------------------------------------------
+%% @doc Returns a new token.
+-spec token(Type     :: term(),
+            Value    :: term(),
+            Chars    :: string(),
+            Start    :: point(),
+            End      :: point(),
+            Children :: [token()],
+            Meta     :: term()) -> token().
+%%------------------------------------------------------------------------------
+token(Type, Value, Chars, Start, End, Children, Meta) ->
+    #token{chars = Chars,
+           type = Type,
+           value = Value,
+           start = Start,
+           'end' = End,
+           children = Children,
+           meta = Meta
+          }.
 
 %%------------------------------------------------------------------------------
 %% @doc Returns Token's string representation
 -spec token_chars(Token :: token()) -> string().
 %%------------------------------------------------------------------------------
-token_chars({_Type, _Term, Chars, _Start, _End}) -> Chars.
+token_chars(Token) -> Token#token.chars.
 
 %%------------------------------------------------------------------------------
 %% @doc Returns Token's end point
 -spec token_end(Token :: token()) -> point().
 %%------------------------------------------------------------------------------
-token_end({_Type, _Term, _Chars, _Start, End}) -> End.
+token_end(Token) -> Token#token.'end'.
 
 %%------------------------------------------------------------------------------
 %% @equiv point(1, 1, 1).
