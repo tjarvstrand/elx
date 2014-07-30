@@ -78,12 +78,12 @@
 %% Perform the action corresponding to Symbol according to Grammar. Action is
 %% called with Tokens as the only argument and its result is returned.
 -spec action(Grammar :: grammar(),
-             Symbol :: non_term_symbol(),
-             Tokens :: [term()]) -> term().
+             Rule    :: rule(),
+             Token   :: elx:token()) -> term().
 %%------------------------------------------------------------------------------
-action(#grammar{rules = Rules}, Rule, Tokens) ->
+action(#grammar{rules = Rules}, Rule, Token) ->
   {Rule, Action} = lists:keyfind(Rule, 1, Rules),
-  Action(Tokens).
+  Action(Token).
 
 %%------------------------------------------------------------------------------
 %% @doc Return a new grammar() instance.
@@ -189,7 +189,12 @@ new_rule({L, _Rs}) when L =:= '.' orelse
                         L =:= '$' ->
   erlang:error({illegal_non_terminal, L});
 new_rule({L, Rs}) ->
-  new_rule({L, Rs, fun(Tokens) -> hd(Tokens) end});
+  new_rule({L, Rs, fun(Token) ->
+                       case elx:token_children(Token) of
+                         []       -> Token;
+                         Children -> elx:set_token_value(Token, hd(Children))
+                       end
+                   end});
 new_rule({L, Rs, A}) ->
   {{L, Rs}, A}.
 
@@ -223,14 +228,31 @@ productions_test_() ->
 action_test_() ->
   {setup,
    fun() ->
-       new([{'A', [], fun([I]) -> "action_"  ++ integer_to_list(I) end},
+       new([{'A', [], fun(Token) ->
+                          elx:set_token_value(Token, "action_1")
+                      end},
             {'B', []}],
            ['A'],
           [])
    end,
    fun(Grammar) ->
-       [?_assertEqual("action_1",action(Grammar, {'A', []}, [1])),
-        ?_assertEqual("action_2",action(Grammar, {'B', []}, ["action_2"]))]
+       [?_assertEqual(elx:token(undefined,
+                                "action_1",
+                               [],
+                               elx:point(),
+                               elx:point()),
+                      action(Grammar,
+                             {'A', []},
+                             elx:token())),
+       ?_assertEqual(elx:token(undefined,
+                               undefined,
+                               [],
+                               elx:point(),
+                               elx:point()),
+                      action(Grammar,
+                             {'B', []},
+                             elx:token()))
+        ]
    end}.
 
 precedences_test_() ->
