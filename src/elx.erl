@@ -64,9 +64,9 @@
 
 %%%_* Defines ==================================================================
 
--record(token, {value          :: term(),
-                type           :: term(),
-                symbol          :: string(),
+-record(token, {type           :: term(),
+                value          :: term(),
+                symbol         :: string(),
                 start          :: point(),
                 'end'          :: point(),
                 children  = [] :: [token()],
