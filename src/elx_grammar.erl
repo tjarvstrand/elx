@@ -28,9 +28,8 @@
 %%%_* Exports ==================================================================
 -export([action/3,
          new/3,
-         precedence_lvl_associativity/2,
          productions/1,
-         rule_precedence/2,
+         precedence/1,
          start_symbols/1,
          symbol_to_start_symbol/1]).
 
@@ -50,9 +49,9 @@
 
 %%%_* Defines ==================================================================
 
--record(grammar, {rules           :: [rule()],
-                  start_symbols   :: [non_term_symbol()],
-                  precedence_lvls :: [{precedence_lvl(),
+-record(grammar, {rules         :: [rule()],
+                  start_symbols :: [non_term_symbol()],
+                  precedence    :: [{precedence_lvl(),
                                      associativity(),
                                      [non_term_symbol()]}]}).
 
@@ -67,7 +66,8 @@
 -type non_term_symbol() :: atom().
 -type term_symbol()     :: string().
 -type associativity()   :: left | right | nonassoc.
--type precedence_lvl()  :: pos_integer().
+-type precedence()      :: pos_integer().
+-type precedence_lvl()  :: {precedence(), associativity()}.
 
 
 %%%_* API ======================================================================
@@ -91,11 +91,14 @@ action(#grammar{rules = Rules}, Rule, Token) ->
           OpPrecedence :: [{associativity(), [symbol()]}],
           StartSymbols :: [non_term_symbol()]) -> grammar().
 %%------------------------------------------------------------------------------
-new(Rules, [_|_] = StartSymbols, PrecedenceDecls) ->
-  #grammar{rules           = lists:map(fun new_rule/1,
-                                       start_rules(StartSymbols) ++ Rules),
-           start_symbols   = StartSymbols,
-           precedence_lvls = precedence(PrecedenceDecls)};
+new(Rules0, [_|_] = StartSymbols, PrecedenceDecls) ->
+  TermSymbolPrec = precedence_lvls(PrecedenceDecls),
+  Rules          = lists:map(fun new_rule/1,
+                             start_rules(StartSymbols) ++ Rules0),
+  RulePrec       = rule_precedences(Rules, TermSymbolPrec),
+  #grammar{rules         = Rules,
+           start_symbols = StartSymbols,
+           precedence    = TermSymbolPrec ++ RulePrec};
 new(_Rules, _StartSymbols, _Precedence) ->
   erlang:error(no_start_state).
 
@@ -111,36 +114,10 @@ productions(#grammar{rules = Rules}) ->
 
 %%------------------------------------------------------------------------------
 %% @doc Return the precedence of Rule if defined.
--spec rule_precedence(Grammar :: grammar(),
-                      Rule    :: production()) -> precedence_lvl() | undefined.
+-spec precedence(Grammar :: grammar()) ->
+                    [{term_symbol() | production(), precedence_lvl()}].
 %%------------------------------------------------------------------------------
-rule_precedence(Grammar, Rule) ->
-  case rule_last_term_symbol(Rule) of
-    {ok, Terminal}    -> term_symbol_precedence(Grammar, Terminal);
-    {error, notfound} -> undefined
-  end.
-
-%%------------------------------------------------------------------------------
-%% @doc Return the precedence of Terminal if defined.
--spec term_symbol_precedence(Grammar  :: grammar(),
-                             Terminal :: term_symbol()) ->
-                             precedence_lvl() | undefined.
-%%------------------------------------------------------------------------------
-term_symbol_precedence(#grammar{precedence_lvls = PrecLvls}, Terminal) ->
-  do_term_symbol_precedence(PrecLvls, Terminal).
-
-%%------------------------------------------------------------------------------
-%% @doc Return the associativity of PrecLvl
--spec precedence_lvl_associativity(Grammar :: grammar(),
-                                   PrecLvl :: precedence_lvl()) ->
-                                      {ok, associativity()} | {error, notfound}.
-%%------------------------------------------------------------------------------
-precedence_lvl_associativity(#grammar{precedence_lvls = PrecLvls}, PrecLvl) ->
-  case lists:keyfind(PrecLvl, 1, PrecLvls) of
-    {PrecLvl, Assoc, _Symbols} -> Assoc;
-    false                      -> {error, notfound}
-  end.
-
+precedence(Grammar) -> Grammar#grammar.precedence.
 
 %%------------------------------------------------------------------------------
 %% @doc Return Symbol converted to a valid start symbol Grammar.
@@ -158,6 +135,35 @@ start_symbols(#grammar{start_symbols = Start}) ->
 
 %%%_* Internal functions =======================================================
 
+
+precedence_lvls([]) ->
+  [];
+precedence_lvls(PrecedenceDecls) ->
+  % If precedence for a symbol is declared more than once, we will choose the
+  % highest declared precedence.
+  lists:reverse(
+    lists:append(
+      lists:zipwith(fun({Assoc, Symbols}, Lvl) ->
+                        [{S, {Lvl, Assoc}} || S <- Symbols]
+                    end,
+                    PrecedenceDecls,
+                    lists:seq(1, length(PrecedenceDecls))))).
+
+rule_precedences(Rules, TermSymbolPrecs) ->
+  lists:filtermap(fun({Production, _Action}) ->
+                      case production_precedence(Production, TermSymbolPrecs) of
+                        undefined      -> false;
+                        {_Prec, _Assoc} = Lvl -> {true, {Production, Lvl}}
+                      end
+                  end,
+                  Rules).
+
+production_precedence(Rule, TermSymbolPrecs) ->
+  case rule_last_term_symbol(Rule) of
+    {ok, Terminal}    -> term_symbol_precedence(Terminal, TermSymbolPrecs);
+    {error, notfound} -> undefined
+  end.
+
 rule_last_term_symbol({_L, R}) ->
   do_last_terminal_symbol(lists:reverse(R)).
 
@@ -165,22 +171,11 @@ do_last_terminal_symbol([])                    -> {error, notfound};
 do_last_terminal_symbol([S|_]) when is_list(S) -> {ok, S};
 do_last_terminal_symbol([_|Rest])              -> do_last_terminal_symbol(Rest).
 
-do_term_symbol_precedence([], _Terminal) ->
-  undefined;
-do_term_symbol_precedence([{Prec, _Assoc, Symbols}|Lvls], Terminal) ->
-  case lists:member(Terminal, Symbols) of
-    true  -> Prec;
-    false -> do_term_symbol_precedence(Lvls, Terminal)
+term_symbol_precedence(Terminal, TermSymbolPrecs) ->
+  case lists:keyfind(Terminal, 1, TermSymbolPrecs) of
+    {Terminal, Lvl} -> Lvl;
+    false           -> undefined
   end.
-
-precedence(PrecedenceDecls) ->
-  % If precedence for a symbol is declared more than once, we will choose the
-  % highest declared precedence.
-  lists:reverse(
-    lists:zipwith(fun({Assoc, Symbols}, Prec) -> {Prec, Assoc, Symbols} end,
-                  PrecedenceDecls,
-                  lists:seq(1, length(PrecedenceDecls)))).
-
 
 start_rules(Symbols) ->
   [{symbol_to_start_symbol(S), [S, '$']} || S <- Symbols].
@@ -257,12 +252,9 @@ precedences_test_() ->
           [{right, ["a"]}])
    end,
    fun(Grammar) ->
-       [?_assertEqual(undefined, rule_precedence(Grammar, {'B', []})),
-        ?_assertEqual(1, rule_precedence(Grammar, {'A', ["a", 'B']})),
-        ?_assertEqual(undefined, rule_precedence(Grammar, {'A', ["c", 'B']})),
-        ?_assertEqual(right, precedence_lvl_associativity(Grammar, 1)),
-        ?_assertEqual({error, notfound},
-                      precedence_lvl_associativity(Grammar, 2))
+       [?_assertEqual([], precedence(elx_grammar:new([{'A', []}], ['A'], []))),
+        ?_assertEqual([{"a", {1, right}}, {{'A', ["a", 'B']}, {1, right}}],
+                      precedence(Grammar))
        ]
    end}.
 
