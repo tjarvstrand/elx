@@ -22,6 +22,14 @@
 %%% @end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+
+% TODO:
+% - Implement relevant parts of
+%    http://www.gnu.org/software/bison/manual/html_node/Action-Features.html
+% - Error recovery
+% - Mid rule actions
+
+
 %%%_* Module declaration =======================================================
 -module(elx_parse_engine).
 
@@ -97,8 +105,8 @@ shift(State, Engine, [Token|Rest]) ->
 
 reduce({NonTerm, Symbols} = Rule, Engine0, Tokens) ->
   {Popped, Engine} = pop_stack(Engine0, length(Symbols)),
-  case action(Engine, NonTerm) of
-    {goto, NewState} ->
+  case elx_dfa:goto(dfa(Engine), state(Engine), NonTerm) of
+    {ok, NewState} ->
       Token0 = create_parent_token(NonTerm, lists:reverse(Popped)),
       Token = elx_grammar:action(grammar(Engine0), Rule, Token0),
       {ok, {push_stack(Engine, Token, NewState), Tokens}};
