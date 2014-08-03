@@ -224,7 +224,7 @@ init_start_state(Productions, NonTerms, Start, Id) ->
 
 dfa_table(Grammar, NonTerms, States0) ->
   States = do_graph(Grammar, NonTerms, States0),
-  case length(States) =:= length(States0) of
+  case States =:= States0 of
     true   -> States0;
     false  -> dfa_table(Grammar, NonTerms, States)
   end.
@@ -762,6 +762,45 @@ goto_test_() ->
                                      edges = [{'A', [2]}]}]},
                       1,
                       'B'))
+  ].
+
+cyclic_dfa_test_() ->
+  [?_assertMatch(#dfa{states = [#state{id = 0,
+                                       items = [{'E',['.','E',"+",'E'],'$'},
+                                                {'E',['.','E',"+",'E'],"+"},
+                                                {'E',['.',"1"],'$'},
+                                                {'E',['.',"1"],"+"},
+                                                {'E\'',['.','E','$'],[]}],
+                                       edges = [{'E',[1]},
+                                                {"1",[2]}]},
+                                #state{id = 1,
+                                       items = [{'E',['E','.',"+",'E'],'$'},
+                                                {'E',['E','.',"+",'E'],"+"},
+                                                {'E\'',['E','.','$'],[]}],
+                                       edges = [{"+",[3]}]},
+                                #state{id = 2,
+                                       items = [{'E',["1",'.'],'$'},
+                                                {'E',["1",'.'],"+"}],
+                                       edges = []},
+                                #state{id = 3,
+                                       items = [{'E',['.','E',"+",'E'],'$'},
+                                                {'E',['.','E',"+",'E'],"+"},
+                                                {'E',['.',"1"],'$'},
+                                                {'E',['.',"1"],"+"},
+                                                {'E',['E',"+",'.','E'],'$'},
+                                                {'E',['E',"+",'.','E'],"+"}],
+                                       edges = [{'E',[4]},
+                                                {"1",[2]}]},
+                                #state{id = 4,
+                                       items = [{'E',['E','.',"+",'E'],'$'},
+                                                {'E',['E','.',"+",'E'],"+"},
+                                                {'E',['E',"+",'E','.'],'$'},
+                                                {'E',['E',"+",'E','.'],"+"}],
+                                       edges = [{"+",[3]}]}]},
+                 new(elx_grammar:new([{'E', ['E', "+", 'E']},
+                                      {'E', ["1"]}],
+                                     ['E'],
+                                     [])))
   ].
 
 %%%_* Test helpers =============================================================
