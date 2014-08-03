@@ -158,18 +158,20 @@ do_action(State, Precedence, Token) ->
     {StateId, Rule}  ->
       case resolve_shift_reduce(Precedence, Rule, Token) of
         shift  -> {shift, StateId};
-        reduce -> {reduce, Rule}
+        reduce -> {reduce, Rule};
+        error  -> {error, {unexpected_token, Token}}
       end
   end.
 
 resolve_shift_reduce(Precedence, Rule, Token) ->
   case {precedence(Precedence, Rule), precedence(Precedence, Token)} of
-    {_,              undefined}                     -> shift;
-    {undefined,      _}                             -> shift;
-    {{RPrec, _},     {TPrec, _}} when RPrec > TPrec -> reduce;
-    {{RPrec, _},     {TPrec, _}} when RPrec < TPrec -> shift;
-    {{Prec,  right}, {Prec,  right}}                -> shift;
-    {{Prec,  left},  {Prec,  left}}                 -> reduce
+    {_,                  undefined}                     -> shift;
+    {undefined,          _}                             -> shift;
+    {{RPrec, _},         {TPrec, _}} when RPrec > TPrec -> reduce;
+    {{RPrec, _},         {TPrec, _}} when RPrec < TPrec -> shift;
+    {{Prec,  right},     {Prec,  right}}                -> shift;
+    {{Prec,  left},      {Prec,  left}}                 -> reduce;
+    {{Prec,  nonassoc},  {Prec,  nonassoc}}             -> error
   end.
 
 precedence(Precedence, RuleOrTerminal) ->
@@ -739,12 +741,21 @@ action_test_() ->
                             precedence = []},
                        1,
                        "a")),
+   % Nonassoc declaration triggers a syntax error
+   ?_assertEqual({error, {unexpected_token, "a"}},
+                 action(#dfa{states = [#state{id = 1,
+                                              items = [{'S',['V', '.'],"a"}],
+                                              edges = [{"a", [2]}]}],
+                             precedence = [{"a",         {1, nonassoc}},
+                                           {{'S',['V']}, {1, nonassoc}}]},
+                        1,
+                        "a")),
    ?_assertEqual({error, {unexpected_token, 'A'}},
-                action(#dfa{states =
-                              [#state{id = 1,
-                                      items = [{'B', ['.', 'A'], "a"}]}]},
-                       1,
-                       'A'))
+                 action(#dfa{states =
+                               [#state{id = 1,
+                                       items = [{'B', ['.', 'A'], "a"}]}]},
+                        1,
+                        'A'))
   ].
 
 goto_test_() ->

@@ -165,6 +165,28 @@ left_assoc_test_() ->
        ]
    end}.
 
+
+non_assoc_test_() ->
+  {setup,
+   fun() ->
+           elx_grammar:new([{'E', ['E', "+", 'E']},
+                            {'E', ["1"]}],
+                           ['E'],
+                           [{nonassoc, ["+"]}])
+   end,
+   fun(Grammar) ->
+       [?_assertMatch({error, {syntax_error, {_, _, {unexpected_token, "+"}}}},
+                     elx_parse_engine:run(Grammar,
+                                         'E',
+                                         [elx:token(integer, 1, "1"),
+                                          elx:token(op, '+', "+"),
+                                          elx:token(integer, 1, "1"),
+                                          elx:token(op, '+', "+"),
+                                          elx:token(integer, 1, "1")]))
+       ]
+   end}.
+
+
 %%%_* Test helpers =============================================================
 %%%_* Emacs ====================================================================
 %%% Local Variables:
