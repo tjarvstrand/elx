@@ -58,7 +58,9 @@
 %%%_* Types ====================================================================
 
 -opaque grammar()       :: #grammar{}.
--type rule()            :: {production(), action()}.
+-type rule()            :: {production(), action()} |
+                           {production(), term_symbol()} |
+                           {production(), action(), term_symbol()}.
 -type production()      :: {non_term_symbol, [symbol()]}.
 -type action()          :: fun().
 
@@ -82,14 +84,14 @@
              Token   :: elx:token()) -> term().
 %%------------------------------------------------------------------------------
 action(#grammar{rules = Rules}, Rule, Token) ->
-  {Rule, Action} = lists:keyfind(Rule, 1, Rules),
+  {Rule, Action, _Precedence} = lists:keyfind(Rule, 1, Rules),
   Action(Token).
 
 %%------------------------------------------------------------------------------
 %% @doc Return a new grammar() instance.
--spec new(Rules        :: rule(),
-          OpPrecedence :: [{associativity(), [symbol()]}],
-          StartSymbols :: [non_term_symbol()]) -> grammar().
+-spec new(Rules           :: rule(),
+          StartSymbols    :: [non_term_symbol()],
+          PrecedenceDecls :: [{associativity(), [term_symbol()]}]) -> grammar().
 %%------------------------------------------------------------------------------
 new(Rules0, [_|_] = StartSymbols, PrecedenceDecls) ->
   TermSymbolPrec = precedence_lvls(PrecedenceDecls),
@@ -110,7 +112,9 @@ new(_Rules, _StartSymbols, _Precedence) ->
 -spec productions(Grammar :: grammar()) -> [{non_term_symbol(), [symbol()]}].
 %%------------------------------------------------------------------------------
 productions(#grammar{rules = Rules}) ->
-  [Production || {Production, _Action} <- Rules].
+  lists:map(fun({Production, _, _}) -> Production
+            end,
+            Rules).
 
 %%------------------------------------------------------------------------------
 %% @doc Return the precedence of Rule if defined.
@@ -150,10 +154,17 @@ precedence_lvls(PrecedenceDecls) ->
                     lists:seq(1, length(PrecedenceDecls))))).
 
 rule_precedences(Rules, TermSymbolPrecs) ->
-  lists:filtermap(fun({Production, _Action}) ->
+  lists:filtermap(fun({Production, _Action, no_precedence}) ->
                       case production_precedence(Production, TermSymbolPrecs) of
                         undefined      -> false;
                         {_Prec, _Assoc} = Lvl -> {true, {Production, Lvl}}
+                      end;
+                     ({Production, _Action, Term}) ->
+                      case term_symbol_precedence(Term, TermSymbolPrecs) of
+                        undefined ->
+                          erlang:error({invalid_rule_precedence, Term});
+                         {_Prec, _Assoc} = Lvl ->
+                          {true, {Production, Lvl}}
                       end
                   end,
                   Rules).
@@ -180,24 +191,49 @@ term_symbol_precedence(Terminal, TermSymbolPrecs) ->
 start_rules(Symbols) ->
   [{symbol_to_start_symbol(S), [S, '$']} || S <- Symbols].
 
-new_rule({L, _Rs}) when L =:= '.' orelse
-                        L =:= '$' ->
-  erlang:error({illegal_non_terminal, L});
-new_rule({L, Rs}) ->
-  new_rule({L, Rs, fun(Token) -> Token end});
-new_rule({L, Rs, A}) ->
-  {{L, Rs}, A}.
+new_rule({Left, _Rs}) when Left =:= '.' orelse
+                        Left =:= '$' ->
+  erlang:error({illegal_non_terminal, Left});
+new_rule({Left, Rights}) ->
+  new_rule({Left, Rights, fun(Token) -> Token end});
+new_rule({Left, Rights, Action}) when is_function(Action) ->
+  new_rule({Left, Rights, Action, no_precedence});
+new_rule({Left, Rights, Precedence}) when is_list(Precedence) ->
+  new_rule({Left, Rights, fun(Token) -> Token end, Precedence});
+new_rule({Left, Rights, Action, Precedence}) ->
+  {{Left, Rights}, Action, Precedence};
+new_rule(Rule) ->
+  erlang:error({invalid_rule, Rule}).
+
 
 %%%_* Tests ====================================================================
 
 new_test_() ->
-  [?_assertError({illegal_non_terminal, '.'}, new([{'.', [["b"]]}], ['.'], []))
+  [?_assertError(no_start_state, new([], [], [])),
+   ?_assertError({illegal_non_terminal, '.'}, new([{'.', [["b"]]}], ['.'], [])),
+   ?_assertError({invalid_rule_precedence, "z"},
+                 new([{'A', ["b", "c"], "z"},
+                      {'A', ["d"]}],
+                     ['A'],
+                     [])),
+   ?_assertError({invalid_rule, {'A', ["b", "c"], 'z'}},
+                 new([{'A', ["b", "c"], 'z'},
+                      {'A', ["d"]}],
+                     ['A'],
+                     [])),
+   ?_assertMatch(#grammar{start_symbols = ['A'],
+                          precedence = [{"z", {1, right}},
+                                        {{'A', ["b", "c"]}, {1, right}}]},
+                 new([{'A', ["b", "c"], "z"}],
+                     ['A'],
+                     [{right, ["z"]}]))
   ].
-
+%% [{precedence_lvl(),
+%%                                      associativity(),
+%%                                      [non_term_symbol()]}]
 
 start_symbols_test_() ->
-  [?_assertEqual(['A', 'B'], start_symbols(new([], ['A', 'B'], []))),
-   ?_assertError(no_start_state, start_symbols(new([], [], [])))
+  [?_assertEqual(['A', 'B'], start_symbols(new([], ['A', 'B'], [])))
   ].
 
 productions_test_() ->
