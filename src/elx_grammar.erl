@@ -58,9 +58,11 @@
 %%%_* Types ====================================================================
 
 -opaque grammar()       :: #grammar{}.
--type rule()            :: {production(), action()} |
-                           {production(), term_symbol()} |
-                           {production(), action(), term_symbol()}.
+-type rule() :: {non_term_symbol(), [symbol()]} |
+                {non_term_symbol(), [symbol()], action()} |
+                {non_term_symbol(), [symbol()], term_symbol()} |
+                {non_term_symbol(), [symbol()], action(), term_symbol()}.
+
 -type production()      :: {non_term_symbol, [symbol()]}.
 -type action()          :: fun().
 
@@ -94,13 +96,15 @@ action(#grammar{rules = Rules}, Rule, Token) ->
           PrecedenceDecls :: [{associativity(), [term_symbol()]}]) -> grammar().
 %%------------------------------------------------------------------------------
 new(Rules0, [_|_] = StartSymbols, PrecedenceDecls) ->
+  validate(Rules0, StartSymbols, PrecedenceDecls),
   TermSymbolPrec = precedence_lvls(PrecedenceDecls),
   Rules          = lists:map(fun new_rule/1,
                              start_rules(StartSymbols) ++ Rules0),
   RulePrec       = rule_precedences(Rules, TermSymbolPrec),
-  #grammar{rules         = Rules,
-           start_symbols = StartSymbols,
-           precedence    = TermSymbolPrec ++ RulePrec};
+  Grammar = #grammar{rules         = Rules,
+                     start_symbols = StartSymbols,
+                     precedence    = TermSymbolPrec ++ RulePrec},
+  Grammar;
 new(_Rules, _StartSymbols, _Precedence) ->
   erlang:error(no_start_state).
 
@@ -205,6 +209,36 @@ new_rule({Left, Rights, Action, Precedence}) ->
 new_rule(Rule) ->
   erlang:error({invalid_rule, Rule}).
 
+validate(Rules, StartSymbols, __PrecedenceDecls) ->
+  NonTerminals = ordsets:from_list(lists:map(fun({S, _}) -> S;
+                                                ({S, _, _}) -> S;
+                                                ({S, _, _, _}) -> S
+                                             end, Rules)),
+  lists:foreach(fun(S) -> validate_component(NonTerminals, S) end,
+                StartSymbols),
+  lists:foreach(fun(Rule) -> validate_rule(NonTerminals, Rule) end, Rules).
+
+validate_rule(NonTerminals, {_Left, Components}) ->
+  validate_components(NonTerminals, Components);
+validate_rule(NonTerminals, {_Left, Components, _Prec}) ->
+  validate_components(NonTerminals, Components);
+validate_rule(NonTerminals, {_Left, Components, _Prec, _Decls}) ->
+  validate_components(NonTerminals, Components).
+
+validate_components(NonTerminals, Components) ->
+  lists:foreach(fun(Component) ->
+                    validate_component(NonTerminals, Component)
+                end,
+                Components).
+
+validate_component(NonTerminals, Component) when is_atom(Component) ->
+  case lists:member(Component, NonTerminals) of
+    true  -> ok;
+    false -> erlang:error({illegal_non_terminal, Component})
+  end;
+validate_component(_NonTerminals, _Rule) ->
+  ok.
+
 
 %%%_* Tests ====================================================================
 
@@ -221,19 +255,29 @@ new_test_() ->
                       {'A', ["d"]}],
                      ['A'],
                      [])),
+   ?_assertError({illegal_non_terminal, 'B'},
+                 new([{'A', ['B']}],
+                     ['A'],
+                     [])),
    ?_assertMatch(#grammar{start_symbols = ['A'],
                           precedence = [{"z", {1, right}},
                                         {{'A', ["b", "c"]}, {1, right}}]},
                  new([{'A', ["b", "c"], "z"}],
                      ['A'],
+                     [{right, ["z"]}])),
+   ?_assertMatch(#grammar{start_symbols = ['A'],
+                          precedence = [{"z", {1, right}},
+                                        {{'A', ["b", "c"]}, {1, right}}]},
+                 new([{'A', ["b", "c"], fake_fun, "z"}],
+                     ['A'],
                      [{right, ["z"]}]))
   ].
-%% [{precedence_lvl(),
-%%                                      associativity(),
-%%                                      [non_term_symbol()]}]
 
 start_symbols_test_() ->
-  [?_assertEqual(['A', 'B'], start_symbols(new([], ['A', 'B'], [])))
+  [?_assertEqual(['A', 'B'],
+                 start_symbols(new([{'A', []},
+                                    {'B', []}],
+                                   ['A', 'B'], [])))
   ].
 
 productions_test_() ->
