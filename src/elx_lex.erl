@@ -210,12 +210,9 @@ scan_string([],     _Grammar, _Offset, _Opts, Tokens) ->
 scan_string(String,  Grammar,  Offset, Opts, Tokens) ->
   debug("Scanning token, point is at ~p", [Offset], Opts),
   case next_token(String, Grammar, Offset, Opts) of
-    {{token, Token}, Rest} ->
-      debug("Found token ~p", [Token], Opts),
-      scan_string(Rest, Grammar, elx:token_end(Token), Opts, [Token|Tokens]);
-    {{skip, Token}, Rest} ->
-      debug("Skipping token ~p", [Token], Opts),
-      scan_string(Rest, Grammar, elx:token_end(Token), Opts, Tokens);
+    {ok, {NewTokens, MatchEnd, Rest}} ->
+      debug("Found tokens ~p", [NewTokens], Opts),
+      scan_string(Rest, Grammar, MatchEnd, Opts, NewTokens ++ Tokens);
     {error, _} = Err ->
       Err
   end.
@@ -223,10 +220,10 @@ scan_string(String,  Grammar,  Offset, Opts, Tokens) ->
 next_token(String, Grammar, Offset, Opts) ->
   case match_action(String, Grammar, Opts) of
     {ok, {{MatchStr, MatchGroups, Action}, Rest}} ->
-      End = elx:point_shift(Offset, MatchStr),
-      case Action(MatchStr, MatchGroups, Offset, End) of
-        {error, Rsn} -> {error, {Rsn, {Offset, String}}};
-        Res          -> {Res, Rest}
+      MatchEnd = elx:point_shift(Offset, MatchStr),
+      case Action(MatchStr, MatchGroups, Offset, MatchEnd) of
+        {error, Rsn}    -> {error, {Rsn, {Offset, String}}};
+        {ok,    Tokens} -> {ok,    {Tokens, MatchEnd, Rest}}
       end;
     {error, nomatch} ->
       {error, {syntax_error, {Offset, String}}}
@@ -485,7 +482,7 @@ next_token_test_() ->
    end,
    fun({Grammar1, Grammar2})->
        [
-        ?_assertMatch({{skip, _}, _},
+        ?_assertMatch({ok, {[], _, _}},
                       next_token("foo", Grammar1, elx:point(), default_opts())),
         ?_assertEqual({"123", "\nbar"},
                       test_chars(next_token("123\nbar",
@@ -634,7 +631,7 @@ debug_test() ->
 
 %%%_* Test helpers =============================================================
 
-test_chars({{token, Token}, Rest}) ->
+test_chars({ok, {[Token], _MatchEnd, Rest}}) ->
   {elx:token_symbol(Token), Rest}.
 
 dummy_token() ->
@@ -643,18 +640,19 @@ dummy_token() ->
 dummy_token(I) ->
   fun(Chars, _Matches, Start, End) ->
       TokenTerm = list_to_atom(Chars ++ "_" ++ integer_to_list(I)),
-      {token, elx:token(dummy, TokenTerm, Chars, Start, End)}
+      {ok, [elx:token(dummy, TokenTerm, Chars, Start, End)]}
   end.
 
 keyword_token() ->
   fun(Chars, _Matches, Start, End) ->
-      {token, elx:token(keyword, list_to_atom(Chars), Chars, Start, End)}
+      {ok, [elx:token(keyword, list_to_atom(Chars), Chars, Start, End)]}
   end.
 
 
 skip() ->
-  fun(Chars, _Matches, Start, End) ->
-      {skip, elx:token(dummy, Chars, Chars, Start, End)} end.
+  fun(_Chars, _Matches, _Start, _End) ->
+      {ok, []}
+  end.
 
 something_illegal() ->
   fun(Chars, _Matches, __Start, _End) ->
