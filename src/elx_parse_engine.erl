@@ -54,7 +54,7 @@
 %%------------------------------------------------------------------------------
 %% @doc Generate a DFA based on Grammar and use it to parse the tokens in Input.
 -spec run(Grammar      :: elx_grammar:grammar(),
-          StartingRule :: elx_grammar:non_term_symbol(),
+          StartingRule :: elx_grammar:symbol(),
           Input        :: [elx_lex:token()]) -> [term()].
 %%------------------------------------------------------------------------------
 run(Grammar, StartSymbol, Input) ->
