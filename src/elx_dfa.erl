@@ -95,7 +95,7 @@ goto(#dfa{states = States}, StateId, NonTerminal) when is_atom(NonTerminal) ->
   #state{edges = Edges} = lists:keyfind(StateId, #state.id, States),
   case lists:keyfind(NonTerminal, 1, Edges) of
     {NonTerminal, [ToStateId|_]} -> {ok, ToStateId};
-    false                      -> {error, {unexpected_token, NonTerminal}}
+    false                        -> {error, {unexpected_token, NonTerminal}}
   end.
 
 

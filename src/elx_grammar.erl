@@ -262,6 +262,7 @@ validate_component(_ValidSymbols, _Component) ->
 
 new_test_() ->
   [?_assertError(no_terminal_declarations, new([], [], [], [])),
+   ?_assertError(no_start_state, new([], ['a'], [], [])),
    ?_assertError({illegal_non_terminal, '.'},
                  new([{'.', [['b']]}], ['b'], ['.'], [])),
    ?_assertError({invalid_rule_precedence, 'z'},

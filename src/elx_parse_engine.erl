@@ -91,14 +91,15 @@ read_eof(Engine) ->
   end.
 
 read_one_token(Engine, [Token|_] = Tokens) ->
-  case action(Engine, elx:token_symbol(Token)) of
+  A = action(Engine, elx:token_type(Token)),
+  case A of
     {shift, State} -> shift(State, Engine, Tokens);
     {reduce, Rule} -> reduce(Rule, Engine, Tokens);
     {error, Rsn}   -> {error, {Engine, Token, Rsn}}
   end.
 
-action(Engine, Symbol) ->
-  elx_dfa:action(dfa(Engine), state(Engine), Symbol).
+action(Engine, TokenType) ->
+  elx_dfa:action(dfa(Engine), state(Engine), TokenType).
 
 shift(State, Engine, [Token|Rest]) ->
   {ok, {push_stack(Engine, Token, State), Rest}}.
@@ -115,13 +116,9 @@ reduce({NonTerm, Symbols} = Rule, Engine0, Tokens) ->
   end.
 
 create_parent_token(NonTerm, Children) ->
-  Value = parent_token_value(Children),
   Start = parent_token_start(Children),
   End   = parent_token_end(Children),
-  elx:token(NonTerm, Value, NonTerm, Start, End, Children).
-
-parent_token_value([])        -> undefined;
-parent_token_value([Child|_]) -> elx:token_value(Child).
+  elx:token(NonTerm, undefined, undefined, Start, End, Children).
 
 parent_token_start([]) -> undefined;
 parent_token_start([Child|Children]) ->
@@ -160,164 +157,175 @@ set_stack(Engine, Stack)    -> Engine#engine{stack = Stack}.
 
 eof_test_() ->
   [?_assertMatch({error, {syntax_error, {_, '$', eof}}},
-                 run(elx_grammar:new([{'S', ["foo", "bar"]}], ['S'], []),
+                 run(elx_grammar:new([{'S', ['foo', 'bar']}],
+                                     ['foo', 'bar'],
+                                     ['S'],
+                                     []),
                      'S',
-                     [elx:token(undefined, undefined, "foo")]))
+                     [elx:token('foo', 'foo', "foo")]))
   ].
 
 run_test_() ->
   [% Parse one token
    ?_assertEqual({ok, [elx:token('S',
                                  undefined,
-                                 'S',
+                                 undefined,
                                  undefined,
                                  undefined,
                                  [elx:token('E',
                                             undefined,
-                                            'E',
                                             undefined,
                                             undefined,
-                                            [elx:token(undefined,
-                                                       undefined,
+                                            undefined,
+                                            [elx:token('foo',
+                                                       'foo',
                                                        "foo")])])]},
                  run(elx_grammar:new([{'S', ['E']},
-                                      {'E', ["foo"]}],
+                                      {'E', ['foo']}],
+                                     ['foo'],
                                      ['S'],
                                      []),
                      'S',
-                     [elx:token(undefined,
-                                undefined,
+                     [elx:token('foo',
+                                'foo',
                                 "foo")])),
-   % Parse several tokens.
+   %% % Parse several tokens.
    ?_assertEqual({ok, [elx:token('S',
                                  undefined,
-                                 'S',
+                                 undefined,
                                  undefined,
                                  undefined,
                                  [elx:token('E',
                                             undefined,
-                                            'E',
                                             undefined,
                                             undefined,
-                                            [elx:token(undefined,
-                                                       undefined,
+                                            undefined,
+                                            [elx:token('foo1',
+                                                       'foo1',
                                                        "foo1")]),
-                                  elx:token(undefined,
-                                            undefined,
+                                  elx:token('+',
+                                            '+',
                                             "+"),
                                   elx:token('E',
                                             undefined,
-                                            'E',
                                             undefined,
                                             undefined,
-                                            [elx:token(undefined,
-                                                       undefined,
+                                            undefined,
+                                            [elx:token('foo2',
+                                                       'foo2',
                                                        "foo2")])])]},
                  run(elx_grammar:new(
-                       [{'S', ['E', "+", 'E'], fun(A) -> A end},
-                        {'E', ["foo1"]},
-                        {'E', ["foo2"]}],
+                       [{'S', ['E', '+', 'E'], fun(A) -> A end},
+                        {'E', ['foo1']},
+                        {'E', ['foo2']}],
+                       ['+', 'foo1', 'foo2'],
                        ['S'],
                        []),
                      'S',
-                     [elx:token(undefined, undefined, "foo1"),
-                      elx:token(undefined, undefined, "+"),
-                      elx:token(undefined, undefined, "foo2")])),
-   % Test that parent start/end is correct when second E is empty,
+                     [elx:token('foo1', 'foo1', "foo1"),
+                      elx:token('+', '+', "+"),
+                      elx:token('foo2', 'foo2', "foo2")])),
+   %% % Test that parent start/end is correct when second E is empty,
    ?_assertEqual({ok, [elx:token('S',
                                  undefined,
-                                 'S',
+                                 undefined,
                                  elx:point(1,1,1),
                                  elx:point(6,1,6),
                                  [elx:token('E',
                                             undefined,
-                                            'E',
+                                            undefined,
                                             elx:point(1,1,1),
                                             elx:point(4,1,4),
-                                            [elx:token(undefined,
-                                                       undefined,
+                                            [elx:token('foo',
+                                                       'foo',
                                                        "foo",
                                                        elx:point(1,1,1),
                                                        elx:point(4,1,4))]),
-                                 elx:token(undefined,
-                                           undefined,
+                                 elx:token('+',
+                                           '+',
                                            "+",
                                             elx:point(5,1,5),
                                             elx:point(6,1,6)),
                                  elx:token('E',
                                            undefined,
-                                           'E')])]},
+                                           undefined)])]},
                  run(elx_grammar:new(
-                       [{'S', ['E', "+", 'E'], fun(A) -> A end},
-                        {'E', ["foo"]},
+                       [{'S', ['E', '+', 'E'], fun(A) -> A end},
+                        {'E', ['foo']},
                         {'E', []}],
+                       ['+', 'foo'],
                        ['S'],
                        []),
                      'S',
-                     [elx:token(undefined,
-                                undefined,
+                     [elx:token('foo',
+                                'foo',
                                 "foo",
                                 elx:point(1,1,1),
                                 elx:point(4,1,4)),
-                      elx:token(undefined,
-                                undefined,
+                      elx:token('+',
+                                '+',
                                 "+",
                                 elx:point(5,1,5),
                                 elx:point(6,1,6))])),
    % Test that parent start/end is correct when first E is empty,
    ?_assertEqual({ok, [elx:token('S',
                                  undefined,
-                                 'S',
+                                 undefined,
                                  elx:point(1,1,1),
                                  elx:point(6,1,6),
                                  [elx:token('E',
-                                           undefined,
-                                           'E'),
-                                  elx:token(undefined,
                                             undefined,
+                                            undefined),
+                                  elx:token('+',
+                                            '+',
                                             "+",
                                             elx:point(1,1,1),
                                             elx:point(2,1,2)),
                                   elx:token('E',
                                             undefined,
-                                            'E',
+                                            undefined,
                                             elx:point(3,1,3),
                                             elx:point(6,1,6),
-                                            [elx:token(undefined,
-                                                       undefined,
+                                            [elx:token('foo',
+                                                       'foo',
                                                        "foo",
                                                        elx:point(3,1,3),
                                                        elx:point(6,1,6))])])]},
                  run(elx_grammar:new(
-                       [{'S', ['E', "+", 'E'], fun(A) -> A end},
-                        {'E', ["foo"], fun(A) -> A end},
+                       [{'S', ['E', '+', 'E'], fun(A) -> A end},
+                        {'E', ['foo'], fun(A) -> A end},
                         {'E', [], fun(A) -> A end}],
+                       ['+', 'E', 'foo'],
                        ['S'],
                        []),
                      'S',
-                     [elx:token(undefined,
-                                undefined,
+                     [elx:token('+',
+                                '+',
                                 "+",
                                 elx:point(1,1,1),
                                 elx:point(2,1,2)),
-                      elx:token(undefined,
-                                undefined,
+                      elx:token('foo',
+                                'foo',
                                 "foo",
                                 elx:point(3,1,3),
                                 elx:point(6,1,6))])),
-   ?_assertMatch({error, {syntax_error, {_, _, {unexpected_token,  "bar"}}}},
-                 run(elx_grammar:new([{'S', ["foo"]}], ['S'], []),
+   ?_assertMatch({error, {syntax_error, {_, _, {unexpected_token,  'bar'}}}},
+                 run(elx_grammar:new([{'S', ['foo']}], ['foo'], ['S'], []),
                      'S',
-                     [elx:token(undefined, undefined, "foo"),
-                      elx:token(undefined, undefined, "bar")])),
+                     [elx:token('foo', undefined, "foo"),
+                      elx:token('bar', undefined, "bar")])),
    ?_assertError({not_start_symbol, 'A'},
-                 run(elx_grammar:new([{'S', [["foo"]]}], ['S'], []), 'A', []))
+                 run(elx_grammar:new([{'S', ['foo']}], ['foo'], ['S'], []),
+                     'A',
+                     []))
   ].
 
 inconsistency_test_() ->
   {setup,
    fun() ->
-       push_stack(new(elx_grammar:new([{'A', []}], ['A'], [])), undefined, 0)
+       push_stack(new(elx_grammar:new([{'A', []}], ['a'], ['A'], [])),
+                  undefined,
+                  0)
    end,
    fun(Engine) ->
        [?_assertError({inconsistent_grammar,
