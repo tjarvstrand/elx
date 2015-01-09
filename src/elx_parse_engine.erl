@@ -41,6 +41,8 @@
 %%%_* Includes =================================================================
 -include_lib("eunit/include/eunit.hrl").
 
+-include("elx.hrl").
+
 %%%_* Defines ==================================================================
 
 -record(engine, {grammar    :: elx_grammar:grammar(),
@@ -74,7 +76,7 @@ init(Engine, StartSymbol) ->
 read_tokens(Engine0, []) ->
   case read_eof(Engine0) of
     {ok, accept}          -> {ok, Engine0};
-    {ok, {Engine, ['$']}} -> read_tokens(Engine, []);
+    {ok, {Engine, [?eof]}} -> read_tokens(Engine, []);
     {error, _} = E        -> E
   end;
 read_tokens(Engine0, Tokens0) ->
@@ -84,10 +86,10 @@ read_tokens(Engine0, Tokens0) ->
   end.
 
 read_eof(Engine) ->
-  case action(Engine, '$') of
+  case action(Engine, ?eof) of
     accept         -> {ok, accept};
-    {reduce, Rule} -> reduce(Rule, Engine, ['$']);
-    {error, Rsn}   -> {error, {Engine, '$', Rsn}}
+    {reduce, Rule} -> reduce(Rule, Engine, [?eof]);
+    {error, Rsn}   -> {error, {Engine, ?eof, Rsn}}
   end.
 
 read_one_token(Engine, [Token|_] = Tokens) ->
@@ -156,7 +158,7 @@ set_stack(Engine, Stack)    -> Engine#engine{stack = Stack}.
 %%%_* Tests ====================================================================
 
 eof_test_() ->
-  [?_assertMatch({error, {syntax_error, {_, '$', eof}}},
+  [?_assertMatch({error, {syntax_error, {_, ?eof, eof}}},
                  run(elx_grammar:new([{'S', ['foo', 'bar']}],
                                      ['foo', 'bar'],
                                      ['S'],

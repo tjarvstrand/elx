@@ -46,6 +46,8 @@
 %%%_* Includes =================================================================
 -include_lib("eunit/include/eunit.hrl").
 
+-include("elx.hrl").
+
 %%%_* Defines ==================================================================
 
 -record(grammar, {rules         :: [rule()],
@@ -58,10 +60,12 @@
 %%%_* Types ====================================================================
 
 -opaque grammar()       :: #grammar{}.
--type rule()            :: {symbol(), [symbol()]} |
-                           {symbol(), [symbol()], action()} |
-                           {symbol(), [symbol()], symbol()} |
-                           {symbol(), [symbol()], action(), symbol()}.
+-type rule()            :: {symbol(), [rule_component()]} |
+                           {symbol(), [rule_component()], action()} |
+                           {symbol(), [rule_component()], symbol()} |
+                           {symbol(), [rule_component()], action(), symbol()}.
+
+-type rule_component()  :: symbol() | ?point | ?eof.
 
 -type production()      :: {non_term_symbol, [symbol()]}.
 -type action()          :: fun().
@@ -203,10 +207,10 @@ term_symbol_precedence(Terminal, TermSymbolPrecs) ->
   end.
 
 start_rules(Symbols) ->
-  [{symbol_to_start_symbol(S), [S, '$']} || S <- Symbols].
+  [{symbol_to_start_symbol(S), [S, ?eof]} || S <- Symbols].
 
-new_rule({Left, _Rs}) when Left =:= '.' orelse
-                        Left =:= '$' ->
+new_rule({Left, _Rs}) when Left =:= ?point orelse
+                        Left =:= ?eof ->
   erlang:error({illegal_non_terminal, Left});
 new_rule({Left, Rights}) ->
   new_rule({Left, Rights, fun(Token) -> Token end});
@@ -231,31 +235,35 @@ validate(Rules, Terminals, StartSymbols, _PrecedenceDecls) ->
                                     erlang:error({invalid_rule, Rule})
                                 end,
                                 Rules)),
-  lists:foreach(fun(S) -> validate_component(Terminals ++ NonTerminals, S) end,
+  lists:foreach(fun(S) -> validate_symbol(Terminals, NonTerminals, S) end,
                 StartSymbols),
-  lists:foreach(fun(R) -> validate_rule(Terminals ++ NonTerminals, R) end,
+  lists:foreach(fun(R) -> validate_rule(Terminals, NonTerminals, R) end,
                 Rules).
 
-validate_rule(NonTerminals, {_Left, Components}) ->
-  validate_components(NonTerminals, Components);
-validate_rule(NonTerminals, {_Left, Components, _Prec}) ->
-  validate_components(NonTerminals, Components);
-validate_rule(NonTerminals, {_Left, Components, _Prec, _Decls}) ->
-  validate_components(NonTerminals, Components).
+validate_rule(Terminals, NonTerminals, {_Left, Symbols}) ->
+  validate_symbols(Terminals, NonTerminals, Symbols);
+validate_rule(Terminals, NonTerminals, {_Left, Symbols, _Prec}) ->
+  validate_symbols(Terminals, NonTerminals, Symbols);
+validate_rule(Terminals, NonTerminals, {_Left, Symbols, _Prec, _Decls}) ->
+  validate_symbols(Terminals, NonTerminals, Symbols).
 
-validate_components(NonTerminals, Components) ->
-  lists:foreach(fun(Component) ->
-                    validate_component(NonTerminals, Component)
+validate_symbols(Terminals, NonTerminals, Symbols) ->
+  lists:foreach(fun(Symbol) ->
+                    validate_symbol(Terminals, NonTerminals, Symbol)
                 end,
-                Components).
+                Symbols).
 
-validate_component(ValidSymbols, Component) when is_atom(Component) ->
-  case lists:member(Component, ValidSymbols) of
+validate_symbol(_Terminals, _NonTerminals, Symbol) when Symbol =:= ?eof orelse
+                                                        Symbol =:= ?point ->
+  erlang:error({illegal_symbol, Symbol});
+validate_symbol(Terminals, NonTerminals, Symbol) when is_atom(Symbol) ->
+  case lists:member(Symbol, Terminals ++ NonTerminals) of
     true  -> ok;
-    false -> erlang:error({illegal_non_terminal, Component})
+    false -> erlang:error({illegal_symbol, Symbol})
   end;
-validate_component(_ValidSymbols, _Component) ->
-  ok.
+validate_symbol(_Terminals, _NonTerminals, Symbol) ->
+  erlang:error({illegal_symbol, Symbol}).
+
 
 
 %%%_* Tests ====================================================================
@@ -263,8 +271,10 @@ validate_component(_ValidSymbols, _Component) ->
 new_test_() ->
   [?_assertError(no_terminal_declarations, new([], [], [], [])),
    ?_assertError(no_start_state, new([], ['a'], [], [])),
-   ?_assertError({illegal_non_terminal, '.'},
-                 new([{'.', [['b']]}], ['b'], ['.'], [])),
+   ?_assertError({illegal_symbol, {'.'}},
+                 new([{".", [['b']]}], ['b'], [{'.'}], [])),
+   ?_assertError({illegal_symbol, "."},
+                 new([{".", [['b']]}], ['b'], ["."], [])),
    ?_assertError({invalid_rule_precedence, 'z'},
                  new([{'A', ['b', 'c'], 'z'},
                       {'A', ['d']}],
@@ -276,7 +286,7 @@ new_test_() ->
                      ['a'],
                      ['A'],
                      [])),
-   ?_assertError({illegal_non_terminal, 'B'},
+   ?_assertError({illegal_symbol, 'B'},
                  new([{'A', ['B']}],
                      ['a'],
                      ['A'],
@@ -315,7 +325,7 @@ productions_test_() ->
           [])
    end,
    fun(Grammar) ->
-       [?_assertEqual([{'A\'', ['A', '$']},
+       [?_assertEqual([{'A\'', ['A', ?eof]},
                        {'A', ['b', 'c']},
                        {'A', ['d']}],
                       productions(Grammar))]
