@@ -169,15 +169,16 @@ do_action(State, Precedence, Token) ->
       end
   end.
 
+%% See Bison Manual 5.3.5: How Precedence Works
 resolve_shift_reduce(Precedence, Rule, Token) ->
   case {precedence(Precedence, Rule), precedence(Precedence, Token)} of
-    {_,                  undefined}                     -> shift;
-    {undefined,          _}                             -> shift;
-    {{RPrec, _},         {TPrec, _}} when RPrec > TPrec -> reduce;
-    {{RPrec, _},         {TPrec, _}} when RPrec < TPrec -> shift;
-    {{Prec,  right},     {Prec,  right}}                -> shift;
-    {{Prec,  left},      {Prec,  left}}                 -> reduce;
-    {{Prec,  nonassoc},  {Prec,  nonassoc}}             -> error
+    {_,                  undefined}                                -> shift;
+    {undefined,          _}                                        -> shift;
+    {{RulePrec, _},      {TokenPrec, _}} when RulePrec > TokenPrec -> reduce;
+    {{Ruleprec, _},      {TokenPrec, _}} when Ruleprec < TokenPrec -> shift;
+    {{Prec,  right},     {Prec,  right}}                           -> shift;
+    {{Prec,  left},      {Prec,  left}}                            -> reduce;
+    {{Prec,  nonassoc},  {Prec,  nonassoc}}                        -> error
   end.
 
 precedence(Precedence, RuleOrTerminal) ->
