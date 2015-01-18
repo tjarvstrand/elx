@@ -211,7 +211,7 @@ start_rules(Symbols) ->
 
 new_rule({Left, _Rs}) when Left =:= ?point orelse
                         Left =:= ?eof ->
-  erlang:error({illegal_non_terminal, Left});
+  erlang:error({illegal_symbol, Left});
 new_rule({Left, Rights}) ->
   new_rule({Left, Rights, fun(Token) -> Token end});
 new_rule({Left, Rights, Action}) when is_function(Action) ->
@@ -271,6 +271,11 @@ validate_symbol(_Terminals, _NonTerminals, Symbol) ->
 new_test_() ->
   [?_assertError(no_terminal_declarations, new([], [], [], [])),
    ?_assertError(no_start_state, new([], ['a'], [], [])),
+   ?_assertError({illegal_symbol, ?eof},
+                 new([{?eof, [['b']]}], ['b'], [?eof], [])),
+   ?_assertError({illegal_symbol, ?eof},
+                 new([{?eof, ['b']},
+                      {'S',  ['a']}], ['a', 'b'], ['S'], [])),
    ?_assertError({illegal_symbol, {'.'}},
                  new([{".", [['b']]}], ['b'], [{'.'}], [])),
    ?_assertError({illegal_symbol, "."},

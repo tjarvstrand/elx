@@ -106,8 +106,8 @@ goto(#dfa{states = States}, StateId, NonTerminal) when is_atom(NonTerminal) ->
 %% @doc Check DFA for conflicts.
 -spec check(DFA :: dfa()) -> ok | {error, {conflicts, [{atom(), state_id()}]}}.
 %%------------------------------------------------------------------------------
-check(#dfa{states = States}) ->
-  case lists:flatmap(fun state_conflicts/1, States) of
+check(#dfa{states = States, precedence = Prec}) ->
+  case lists:flatmap(fun(State) -> state_conflicts(State, Prec) end, States) of
     []        -> ok;
     Conflicts -> {error, {conflicts, Conflicts}}
   end.
@@ -147,9 +147,9 @@ new(Productions, Terms, StartSymbols, Precedence) ->
        precedence = Precedence}.
 
 
-do_action(#state{items = Items}, _Precedence, ?eof) ->
-  case reduction_rule(Items, ?eof) of
-    false ->
+do_action(#state{items = Items}, Precedence, ?eof) ->
+  case reduction_rule(Items, Precedence, ?eof) of
+    undefined ->
       case lists:any(fun item_accept_p/1, Items) of
         true  -> accept;
         false -> {error, eof}
@@ -157,10 +157,12 @@ do_action(#state{items = Items}, _Precedence, ?eof) ->
     Rule -> {reduce, Rule}
   end;
 do_action(State, Precedence, Token) ->
-  case {shift_state(State, Token), reduction_rule(State#state.items, Token)} of
-    {false,   false} -> {error, {unexpected_token, Token}};
-    {false,   Rule}  -> {reduce, Rule};
-    {StateId, false} -> {shift, StateId};
+  ReductionRule = reduction_rule(State#state.items, Precedence, Token),
+  ShiftState    = shift_state(State, Token),
+  case {ShiftState, ReductionRule} of
+    {undefined, undefined} -> {error, {unexpected_token, Token}};
+    {undefined, Rule}      -> {reduce, Rule};
+    {StateId,   undefined} -> {shift, StateId};
     {StateId, Rule}  ->
       case resolve_shift_reduce(Precedence, Rule, Token) of
         shift  -> {shift, StateId};
@@ -172,13 +174,14 @@ do_action(State, Precedence, Token) ->
 %% See Bison Manual 5.3.5: How Precedence Works
 resolve_shift_reduce(Precedence, Rule, Token) ->
   case {precedence(Precedence, Rule), precedence(Precedence, Token)} of
-    {_,                  undefined}                                -> shift;
-    {undefined,          _}                                        -> shift;
-    {{RulePrec, _},      {TokenPrec, _}} when RulePrec > TokenPrec -> reduce;
-    {{Ruleprec, _},      {TokenPrec, _}} when Ruleprec < TokenPrec -> shift;
-    {{Prec,  right},     {Prec,  right}}                           -> shift;
-    {{Prec,  left},      {Prec,  left}}                            -> reduce;
-    {{Prec,  nonassoc},  {Prec,  nonassoc}}                        -> error
+    {_,                 undefined}                                -> shift;
+    {undefined,         _}                                        -> shift;
+    {{RulePrec, _},     {TokenPrec, _}} when RulePrec > TokenPrec -> reduce;
+    {{Ruleprec, _},     {TokenPrec, _}} when Ruleprec < TokenPrec -> shift;
+    {{Prec,  right},    {Prec,  right}}                           -> shift;
+    {{Prec,  left},     {Prec,  left}}                            -> reduce;
+    {{Prec,  prec},     {Prec,  prec}}                            -> shift;
+    {{Prec,  nonassoc}, {Prec,  nonassoc}}                        -> error
   end.
 
 precedence(Precedence, RuleOrTerminal) ->
@@ -190,33 +193,74 @@ precedence(Precedence, RuleOrTerminal) ->
 shift_state(#state{edges = Edges}, Token) ->
   case lists:keyfind(Token, 1, Edges) of
     {Token, [StateId|_]} -> StateId;
-    false                -> false
+    false                -> undefined
   end.
 
-reduction_rule([],  _Token) ->
-  false;
-reduction_rule([{ProdL, ProdR, Token} = Item|Items], Token) ->
-  case item_reduce_p(Item) of
-    true  ->
-      % Get rid of the position indicator
-      {ProdL, lists:droplast(ProdR)};
-    false ->
-      reduction_rule(Items, Token)
-  end;
-reduction_rule([_|Items], Token) ->
-  reduction_rule(Items, Token).
+reduction_rule(Items, Precedence, Token) ->
+  case reduction_item(Items, Precedence, Token) of
+    {undefined, undefined} -> undefined;
+    {_ItemPrec, Item}      -> item_to_rule(Item)
+  end.
+
+%% An item contains a point and a lookahead token for a dfa. A rule doesn't.
+item_to_rule({ProdL, ProdR, _Token}) ->
+  {ProdL, lists:delete(?point, ProdR)}.
+
+reduction_item(Rules, Precedence, Token) ->
+  reduction_item(Rules, Precedence, Token, undefined, undefined).
+
+reduction_item([], _Prec, _Token, Highest, HighestRule) ->
+  {Highest, HighestRule};
+reduction_item([{_, _, Token} = Rule|Rs], Prec, Token, Highest, HighestRule) ->
+  {NewHighest, NewHighestRule} =
+    case item_reduce_p(Rule) of
+      false -> {Highest, HighestRule};
+      true  ->
+        case precedence(Prec, Rule) of
+          undefined when HighestRule =:= undefined -> {undefined, Rule};
+          undefined                                -> {Highest,   HighestRule};
+          RulePrec when Highest =:= undefined      -> {RulePrec,  Rule};
+          RulePrec when RulePrec > Highest         -> {RulePrec,  Rule};
+          _                                        -> {Highest,   HighestRule}
+        end
+    end,
+  reduction_item(Rs, Prec, Token, NewHighest, NewHighestRule);
+reduction_item([_Rule|Rs], Prec, Token, Highest, HighestRule0) ->
+  reduction_item(Rs, Prec, Token, Highest, HighestRule0).
 
 
-state_conflicts(#state{id = Id, items = Items}) ->
+state_conflicts(#state{id = Id, items = Items}, Precedence) ->
+  lists:flatmap(fun({Lookahead, Rules}) ->
+                   state_lookahead_conflicts(Id, Lookahead, Rules, Precedence)
+                end,
+                group_items_by_lookahead(Items)).
+
+state_lookahead_conflicts(StateId, Lookahead, Items, Precedence) ->
   {Reduce, Shift} = lists:partition(fun(I) -> item_reduce_p(I) end, Items),
   Errors0 = case {Reduce, Shift} of
-              {[_|_], [_|_]} -> [{shift_reduce, Id}];
-              _              -> []
+              _ when Lookahead =:= ?eof -> [];
+              {[], _}                   -> [];
+              {_,  []}                  -> [];
+              {[_|_], [_|_]}            ->
+                {RulePrec, _} = reduction_item(Reduce, Precedence, Lookahead),
+                case {RulePrec, precedence(Precedence, Lookahead)} of
+                  {undefined, undefined} -> [{shift_reduce, StateId}];
+                  _                         -> []
+                end
             end,
   case length(lists:ukeysort(3, Reduce)) =:= length(Reduce) of
-    false -> [{reduce_reduce, Id}|Errors0];
+    false -> [{reduce_reduce, StateId}|Errors0];
     true -> Errors0
   end.
+
+group_items_by_lookahead(Rules) ->
+  dict:to_list(
+    lists:foldl(
+      fun({_Right, _Left, Lookahead} = Rule, Acc) ->
+          dict:update(Lookahead, fun(Rs) -> [Rule|Rs] end, [Rule], Acc)
+      end,
+      dict:new(),
+      Rules)).
 
 init_start_states(Productions, Terms, NonTerms, StartSymbols) ->
   SymbolIdMap = lists:zip(StartSymbols, lists:seq(0, length(StartSymbols) - 1)),
@@ -655,13 +699,14 @@ dfa_table_2_test_() ->
    end}.
 
 check_test_() ->
-  [?_assertEqual(ok, check(#dfa{ states = [#state{id = 1,
+  [
+   ?_assertEqual(ok, check(#dfa{ states = [#state{id = 1,
                                                   items = [{'S',['V',?point],?eof}],
                                                   edges = []}]})),
    ?_assertEqual({error, {conflicts, [{shift_reduce, 1}]}},
                  check(#dfa{ states = [#state{id = 1,
-                                              items = [{'S',['V',?point],?eof},
-                                                       {'S',['V',?point, 'E'],?eof}
+                                              items = [{'S',['V',?point],'a'},
+                                                       {'S',['V',?point, 'E'],'a'}
                                                       ],
                                                   edges = []}]})),
    ?_assertEqual({error, {conflicts, [{reduce_reduce, 1}]}},
@@ -673,9 +718,9 @@ check_test_() ->
 
    ?_assertEqual({error, {conflicts, [{reduce_reduce, 1}, {shift_reduce, 1}]}},
                  check(#dfa{ states = [#state{id = 1,
-                                              items = [{'S',['V',?point],?eof},
-                                                       {'S',['E',?point],?eof},
-                                                       {'S',['V',?point, 'E'],?eof}
+                                              items = [{'S',['V',?point],'a'},
+                                                       {'S',['E',?point],'a'},
+                                                       {'S',['V',?point, 'E'],'a'}
                                                       ],
                                                   edges = []}]})),
    ?_assertEqual(ok, check(#dfa{ states = [#state{id = 1,
@@ -720,7 +765,7 @@ action_test_() ->
                                               edges = [{'x', [2]}]}]},
                         1,
                         'x')),
-  % Only option is to reduce
+  %% % Only option is to reduce
   ?_assertEqual({reduce, {'S', ['V']}},
                 action(#dfa{states = [#state{id = 1,
                                              items = [{'S',['V', ?point],'a'}],
@@ -872,6 +917,48 @@ cyclic_dfa_test_() ->
                     lists:nth(5, States))
       ]
   end}.
+
+reduction_item_test_() ->
+  [% Base case
+   ?_assertEqual({undefined, undefined},
+                reduction_item([], [], [])),
+   % Only one item
+   ?_assertEqual({undefined, {'A', ['a', ?point], 'b'}},
+                reduction_item([{'A', ['a', ?point], 'b'}], [], 'b')),
+   % Take first rule if no precedence  specified
+   ?_assertEqual({undefined, {'A', ['a', ?point], 'b'}},
+                reduction_item([{'A', ['a', ?point], 'b'},
+                                {'B', ['a', ?point], 'b'}],
+                               [],
+                               'b')),
+   % Assert that first rule is ignored if it's not a reduction rule
+   ?_assertEqual({undefined, {'B', ['a', ?point], 'b'}},
+                reduction_item([{'A', ['a', ?point, 'c'], 'b'},
+                                {'B', ['a', ?point], 'b'}],
+                               [],
+                               'b')),
+   % Assert that first rule is ignored if its lookahead doesn't match
+   ?_assertEqual({undefined, {'B', ['a', ?point], 'b'}},
+                reduction_item([{'A', ['a', ?point], 'a'},
+                                {'B', ['a', ?point], 'b'}],
+                               [],
+                               'b')),
+   % Assert that rule with precedence is chosen over rule with no precedence
+   ?_assertEqual({1, {'B', ['a', ?point], 'b'}},
+                reduction_item([{'A', ['a', ?point], 'b'},
+                                {'B', ['a', ?point], 'b'}],
+                               [{{'B', ['a', ?point], 'b'}, 1}],
+                               'b')),
+   % Assert that rule with highest precedence is chosen
+   ?_assertEqual({3, {'B', ['a', ?point], 'b'}},
+                reduction_item([{'A', ['a', ?point], 'b'},
+                                {'B', ['a', ?point], 'b'},
+                                {'C', ['a', ?point], 'b'}],
+                               [{{'A', ['a', ?point], 'b'}, 1},
+                                {{'B', ['a', ?point], 'b'}, 3},
+                                {{'C', ['a', ?point], 'b'}, 2}],
+                               'b'))
+  ].
 
 %%%_* Test helpers =============================================================
 %%%_* Emacs ====================================================================
