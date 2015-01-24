@@ -46,8 +46,8 @@
 
 -record(dfa, {start       = [] :: [{elx_grammar:symbol(), state_id()}],
               states      = [] :: state(),
-              precedence  = [] :: [{elx_grammar:symbol() |
-                                    elx_grammar:production(),
+              precedence  = [] :: [{{elx_grammar:symbol() |
+                                     elx_grammar:production()},
                                     elx_grammar:precedence()}]}).
 
 
@@ -62,9 +62,9 @@
 -type state()           :: #state{}.
 -type state_id()        :: non_neg_integer().
 
--type item()            :: {ProdLeft  :: elx_grammar:symbol(),
-                            ProdR     :: [elx_grammar:symbol()],
-                            Lookahead :: elx_grammar:symbol()}.
+-type item()            :: {ProdLeft   :: elx_grammar:symbol(),
+                            ProdR      :: [elx_grammar:symbol()],
+                            Lookaheads :: [elx_grammar:symbol()]}.
 
 %%%_* API ======================================================================
 
@@ -137,7 +137,7 @@ new(Grammar) ->
 %%%_* Internal functions =======================================================
 
 new(Productions, Terms, StartSymbols, Precedence) ->
-  NonTerms = first(Productions, Terms),
+  NonTerms = first_sets(Productions, Terms, grammar_non_terms(Productions)),
   {Start, StartStates} = init_start_states(Productions,
                                            Terms,
                                            NonTerms,
@@ -202,65 +202,45 @@ reduction_rule(Items, Precedence, Token) ->
     {_ItemPrec, Item}      -> item_to_rule(Item)
   end.
 
-%% An item contains a point and a lookahead token for a dfa. A rule doesn't.
-item_to_rule({ProdL, ProdR, _Token}) ->
-  {ProdL, lists:delete(?point, ProdR)}.
-
-reduction_item(Rules, Precedence, Token) ->
-  reduction_item(Rules, Precedence, Token, undefined, undefined).
-
-reduction_item([], _Prec, _Token, Highest, HighestRule) ->
-  {Highest, HighestRule};
-reduction_item([{_, _, Token} = Rule|Rs], Prec, Token, Highest, HighestRule) ->
-  {NewHighest, NewHighestRule} =
-    case item_reduce_p(Rule) of
-      false -> {Highest, HighestRule};
-      true  ->
-        case precedence(Prec, Rule) of
-          undefined when HighestRule =:= undefined -> {undefined, Rule};
-          undefined                                -> {Highest,   HighestRule};
-          RulePrec when Highest =:= undefined      -> {RulePrec,  Rule};
-          RulePrec when RulePrec > Highest         -> {RulePrec,  Rule};
-          _                                        -> {Highest,   HighestRule}
-        end
-    end,
-  reduction_item(Rs, Prec, Token, NewHighest, NewHighestRule);
-reduction_item([_Rule|Rs], Prec, Token, Highest, HighestRule0) ->
-  reduction_item(Rs, Prec, Token, Highest, HighestRule0).
-
-
 state_conflicts(#state{id = Id, items = Items}, Precedence) ->
   lists:flatmap(fun({Lookahead, Rules}) ->
                    state_lookahead_conflicts(Id, Lookahead, Rules, Precedence)
                 end,
-                group_items_by_lookahead(Items)).
+                group_items_by_lookahead(orddict:to_list(Items))).
+
+group_items_by_lookahead(Items) ->
+  orddict:to_list(
+    orddict:fold(
+      fun(Production, Lookaheads, LookaheadMap0) ->
+          ordsets:fold(fun(Lookahead, LookaheadMap) ->
+                           Rule = {Production, Lookaheads},
+                           orddict:update(Lookahead, fun(Rs) -> [Rule|Rs] end,
+                                          [Rule],
+                                          LookaheadMap)
+                       end,
+                       LookaheadMap0,
+                       Lookaheads)
+      end,
+      orddict:new(),
+      Items)).
 
 state_lookahead_conflicts(StateId, Lookahead, Items, Precedence) ->
   {Reduce, Shift} = lists:partition(fun(I) -> item_reduce_p(I) end, Items),
+  {RulePrec, _} = reduction_item(Reduce, Precedence, Lookahead),
   Errors0 = case {Reduce, Shift} of
               _ when Lookahead =:= ?eof -> [];
               {[], _}                   -> [];
               {_,  []}                  -> [];
               {[_|_], [_|_]}            ->
-                {RulePrec, _} = reduction_item(Reduce, Precedence, Lookahead),
                 case {RulePrec, precedence(Precedence, Lookahead)} of
                   {undefined, undefined} -> [{shift_reduce, StateId}];
                   _                         -> []
                 end
             end,
-  case length(lists:ukeysort(3, Reduce)) =:= length(Reduce) of
-    false -> [{reduce_reduce, StateId}|Errors0];
-    true -> Errors0
+  case length(Reduce) > 1 of
+    true when RulePrec =:= undefined -> [{reduce_reduce, StateId}|Errors0];
+    _                                -> Errors0
   end.
-
-group_items_by_lookahead(Rules) ->
-  dict:to_list(
-    lists:foldl(
-      fun({_Right, _Left, Lookahead} = Rule, Acc) ->
-          dict:update(Lookahead, fun(Rs) -> [Rule|Rs] end, [Rule], Acc)
-      end,
-      dict:new(),
-      Rules)).
 
 init_start_states(Productions, Terms, NonTerms, StartSymbols) ->
   SymbolIdMap = lists:zip(StartSymbols, lists:seq(0, length(StartSymbols) - 1)),
@@ -273,7 +253,8 @@ init_start_states(Productions, Terms, NonTerms, StartSymbols) ->
 
 init_start_state(Productions, Terms, NonTerms, Start, Id) ->
   AuxStart = {elx_grammar:symbol_to_start_symbol(Start), [Start, ?eof]},
-  Items = closure(Productions, Terms, NonTerms, [item_init(AuxStart, undefined)]),
+  StartItems = item_add(item_init(AuxStart, []), orddict:new()),
+  Items = closure(Productions, Terms, NonTerms, StartItems),
   #state{id = Id, items = Items, items_hash = items_hash(Items)}.
 
 dfa_table(Grammar, Terms, NonTerms, States0) ->
@@ -293,6 +274,7 @@ do_graph(Grammar, Terms, NonTerms, States0) ->
 graph_state(Grammar, Terms, NonTerms, State, States0) ->
   Id = State#state.id,
   lists:foldl(fun(Item, States) ->
+                  % TODO Send in the state instead of ID
                   add_item_state(Grammar, Terms, NonTerms, Item, Id, States)
               end,
               States0,
@@ -300,7 +282,7 @@ graph_state(Grammar, Terms, NonTerms, State, States0) ->
 
 add_item_state(Grammar, Terms, NonTerms, Item, ItemStateId, States0) ->
   case item_next(Item) of
-    ?eof            -> States0;
+    ?eof           -> States0;
     {error, empty} -> States0;
     Next           ->
       From = lists:keyfind(ItemStateId, #state.id, States0),
@@ -316,7 +298,7 @@ next_state_id(States) ->
   lists:max([Id || #state{id = Id} <- States]) + 1.
 
 go_to(Grammar, Terms, NonTerms, From, States0, Token) ->
-  To0 = do_go_to(Grammar, Terms, NonTerms, From, Token, ordsets:new()),
+  To0 = do_go_to(Grammar, Terms, NonTerms, From, Token, orddict:new()),
   case lists:keytake(To0#state.items_hash, #state.items_hash, States0) of
     false    ->
       Id = next_state_id(States0),
@@ -326,7 +308,7 @@ go_to(Grammar, Terms, NonTerms, From, States0, Token) ->
   end.
 
 merge_state_items(#state{items = Items1} = State1, #state{items = Items2}) ->
-  State1#state{items = ordsets:union(Items1, Items2)}.
+  State1#state{items = merge_closures(Items1, Items2)}.
 
 do_go_to(Grammar, Terms, NonTerms, #state{items = []}, _Token, Acc) ->
   Items = closure(Grammar, Terms, NonTerms, Acc),
@@ -334,7 +316,7 @@ do_go_to(Grammar, Terms, NonTerms, #state{items = []}, _Token, Acc) ->
 do_go_to(Grammar, Terms, NonTerms, State,  Token, Acc0) ->
   [Item|Rst] = State#state.items,
   Acc = case item_next(Item) of
-          Token -> ordsets:add_element(item_advance(Item), Acc0);
+          Token -> item_add(item_advance(Item), Acc0);
           _     -> Acc0
         end,
   do_go_to(Grammar, Terms, NonTerms, State#state{items = Rst}, Token, Acc).
@@ -346,28 +328,67 @@ closure(Grammar, Terms, NonTerms, Items0) ->
   end.
 
 do_closure(Grammar, Terms, NonTerms, Items) ->
-  ordsets:fold(fun(I, Acc) ->
-                   Closure = item_closure(Grammar, Terms, NonTerms, I),
-                   ordsets:union(Acc, Closure)
+  orddict:fold(fun(Prod, Lookaheads, Acc) ->
+                   Closure = item_closure(Grammar, Terms, NonTerms, {Prod, Lookaheads}),
+                   merge_closures(Closure, Acc)
                end,
                Items,
                Items).
 
+% Merge Closure1 into Closure2. A closure is a list of items.
+merge_closures(Closure1, Closure2) ->
+  orddict:fold(fun(Prod, Lookaheads, Closure) ->
+                   item_add({Prod, Lookaheads}, Closure)
+               end,
+               Closure2,
+               Closure1).
+
+item_add({Prod, Lookaheads}, Dict) ->
+  MergeLAs = fun(Lookaheads0) ->
+                 ordsets:union(Lookaheads, Lookaheads0)
+             end,
+  orddict:update(Prod, MergeLAs, Lookaheads, Dict).
+
+%% An item contains a point and a lookahead token for a dfa. A rule doesn't.
+item_to_rule({{ProdL, ProdR}, _Lookaheads}) ->
+  {ProdL, lists:delete(?point, ProdR)}.
+
+reduction_item(Rules, Precedence, Lookahead) ->
+  reduction_item(Rules, Precedence, Lookahead, undefined, undefined).
+
+reduction_item([], _Prec, _Lookahead, Highest, HighestRule) ->
+  {Highest, HighestRule};
+reduction_item([Rule|Rs], Prec, Lookahead, Highest, HighestRule) ->
+  {{_, _}, Lookaheads} = Rule,
+  {NewHighest, NewHighestRule} =
+    case lists:member(Lookahead, Lookaheads) and item_reduce_p(Rule) of
+      false -> {Highest, HighestRule};
+      true  ->
+        case precedence(Prec, Rule) of
+          undefined when HighestRule =:= undefined -> {undefined, Rule};
+          undefined                                -> {Highest,   HighestRule};
+          RulePrec when Highest =:= undefined      -> {RulePrec,  Rule};
+          RulePrec when RulePrec > Highest         -> {RulePrec,  Rule};
+          _                                        -> {Highest,   HighestRule}
+        end
+    end,
+  reduction_item(Rs, Prec, Lookahead, NewHighest, NewHighestRule).
+
 items_hash(Items) ->
-  erlang:phash2(ordsets:from_list([{L, R} || {L, R, _LA} <- Items])).
+  erlang:phash2(ordsets:from_list([Prod || {Prod, _LA} <- Items])).
 
-item_init({L, R}, Lookahead) ->
-  {L, [?point|R], Lookahead}.
+item_init({L, R}, Lookaheads) ->
+  {{L, [?point|R]}, ordsets:from_list(Lookaheads)}.
 
-item_advance({L, R, Lookahead}) ->
-  {L, item_advance_r(R, []), Lookahead}.
+item_advance({{L, R}, Lookaheads}) ->
+  {{L, item_advance_r(R, [])}, Lookaheads}.
 
 item_advance_r([?point,Next|Rest], Acc) ->
   lists:reverse(Acc) ++ [Next, ?point] ++ Rest;
 item_advance_r([Next|Rest], Acc) ->
   item_advance_r(Rest, [Next|Acc]).
 
-item_accept_p({_ProdL, ProdR, _}) ->
+item_accept_p({{_ProdL, ProdR}, _}) ->
   case lists:reverse(ProdR) of
     [?eof, ?point|_] -> true;
     _            -> false
@@ -382,7 +403,7 @@ item_next(Item) ->
     {Next, _Rest}   -> Next
   end.
 
-item_partition_next({_L, R, _LookAhead}) ->
+item_partition_next({{_L, R}, _Lookaheads}) ->
   case lists:splitwith(fun(T) -> T =/= ?point end, R) of
     {_, [?point]} -> {error, empty};
     {_, [?point, Next|Rest]} -> {Next, Rest}
@@ -391,38 +412,39 @@ item_partition_next({_L, R, _LookAhead}) ->
 item_closure(Grammar, Terms, NonTerms, Item) ->
   case item_partition_next(Item) of
     {error, empty} ->
-      ordsets:new();
+      orddict:new();
     {Next, Rest} ->
-      Lookaheads = item_lookaheads(Terms, NonTerms, Rest, Item),
       F = fun({ProdL, _ProdR} = Prod, Acc) when ProdL =:= Next ->
-             [item_init(Prod, LA) || LA <- Lookaheads] ++ Acc;
+              Lookaheads = item_lookaheads(Terms, NonTerms, Rest, Item),
+              item_add(item_init(Prod, Lookaheads), Acc);
              (_Prod, Acc) ->
               Acc
           end,
-      ordsets:from_list(lists:foldl(F, [], Grammar))
+      orddict:from_list(lists:foldl(F, [], Grammar))
   end.
 
-% Find the FIRST set of an imaginary production ?point
-item_lookaheads(Terms, NonTerms0, Rest, {_ItemL, _ItemR, ItemLookahead}) ->
-  ProdR = case ItemLookahead of
-            undefined     -> Rest;
-            ItemLookahead -> Rest ++ [ItemLookahead]
-          end,
-  Firsts = production_first({?point, ProdR},
-                            Terms,
-                            orddict:store(?point, #non_term{}, NonTerms0)),
-  (orddict:fetch(?point, Firsts))#non_term.first.
+item_lookaheads(Terms, NonTerms, Rest, {{_ItemL, _ItemR}, ItemLookaheads}) ->
+  First = prod_first(Terms, NonTerms, Rest),
+  case prod_nullable_p(Rest, Terms, NonTerms) of
+    false -> First;
+    true  ->
+      ordsets:fold(fun(Lookahead, Acc) ->
+                       prod_first(Terms, NonTerms, [Lookahead], Acc)
+                   end,
+                   First,
+                   ItemLookaheads)
+  end.
 
-first(Productions, Terms) ->
-  first(Productions, Terms, grammar_non_terms(Productions)).
+first_sets(Productions, Terms) ->
+  first_sets(Productions, Terms, grammar_non_terms(Productions)).
 
-first(Productions, Terms, NonTerms0) ->
-  case do_first(Productions, Terms, NonTerms0) of
+first_sets(Productions, Terms, NonTerms0) ->
+  case do_first_sets(Productions, Terms, NonTerms0) of
     NonTerms0 -> NonTerms0;
-    NonTerms  -> first(Productions, Terms, NonTerms)
+    NonTerms  -> first_sets(Productions, Terms, NonTerms)
   end.
 
-do_first(Productions, Terms, NonTerms) ->
+do_first_sets(Productions, Terms, NonTerms) ->
   lists:foldl(fun(P, NonTerms1) -> production_first(P, Terms, NonTerms1) end,
               NonTerms,
               Productions).
@@ -431,6 +453,12 @@ production_first(Production, Terms, NonTerms) ->
   update_prod_first(Production,
                     Terms,
                     update_prod_nullable(Production, Terms, NonTerms)).
+
+update_prod_first({ProdL, ProdR}, Terms, NonTerms) ->
+  Update = fun(#non_term{first = First} = NT) ->
+               NT#non_term{first = prod_first(Terms, NonTerms, ProdR, First)}
+           end,
+  orddict:update(ProdL, Update, NonTerms).
 
 grammar_non_terms(Grammar) ->
   orddict:from_list([{L, #non_term{}} || {L, _R} <- Grammar]).
@@ -455,11 +483,8 @@ prod_nullable_p(ProdR, Terms, NonTerms) ->
             end,
             ProdR).
 
-update_prod_first({ProdL, ProdR}, Terms, NonTerms) ->
-  Update = fun(#non_term{first = First} = NT) ->
-               NT#non_term{first = prod_first(Terms, NonTerms, ProdR, First)}
-           end,
-  orddict:update(ProdL, Update, NonTerms).
+prod_first(Terms, NonTerms, Prod)  ->
+  prod_first(Terms, NonTerms, Prod, ordsets:new()).
 
 prod_first(_Terms, _NonTerms, [],            Acc)  ->
   Acc;
@@ -495,24 +520,24 @@ first_test_() ->
        {'E', #non_term{nullable = true,  first = ['y']}},
        {'F', #non_term{nullable = true,  first = ['x']}},
        {'S', #non_term{nullable = false, first = ['u']}}],
-      first([{'S', ['u', 'B', 'D', 'z']},
-             {'B', ['B', 'v']},           {'B', ['w']},
-             {'D', ['E', 'F']},
-             {'E', ['y']},                {'E', []},
-             {'F', ['x']},                {'F', []}],
-           ['u', 'x', 'y', 'w', 'z'])),
+      first_sets([{'S', ['u', 'B', 'D', 'z']},
+                  {'B', ['B', 'v']},           {'B', ['w']},
+                  {'D', ['E', 'F']},
+                  {'E', ['y']},                {'E', []},
+                  {'F', ['x']},                {'F', []}],
+                 ['u', 'x', 'y', 'w', 'z'])),
    ?_assertEqual(
       [{'E', #non_term{nullable = false, first = ['(', '-', 'x']}},
        {'L', #non_term{nullable = true,  first = ['(']}},
        {'M', #non_term{nullable = true,  first = ['-']}},
        {'S', #non_term{nullable = false, first = ['(', '-', 'x']}},
        {'V', #non_term{nullable = false, first = ['x']}}],
-      first([{'S', ['E', ?eof]},
-             {'E', ['-', 'E']}, {'E', ['(', 'E', ')']}, {'E', ['V', 'M']},
-             {'M', ['-', 'E']}, {'M', []},
-             {'V', ['x', 'L']},
-             {'L', ['(', 'E', ')']}, {'L', []}],
-            ['(', ')', '-', 'x']))
+      first_sets([{'S', ['E', ?eof]},
+                  {'E', ['-', 'E']}, {'E', ['(', 'E', ')']}, {'E', ['V', 'M']},
+                  {'M', ['-', 'E']}, {'M', []},
+                  {'V', ['x', 'L']},
+                  {'L', ['(', 'E', ')']}, {'L', []}],
+                 ['(', ')', '-', 'x']))
   ].
 
 update_prod_nullable_test_() ->
@@ -615,14 +640,12 @@ dfa_table_2_test_() ->
    fun(#dfa{states = Table}) ->
        [?_assertEqual(10, length(Table)),
         ?_assertMatch(#state{id = 0,
-                             items = [{'E',[?point,'V'],?eof},
-                                      {'S',[?point,'E'],?eof},
-                                      {'S',[?point,'V','=','E'],?eof},
-                                      {'S\'',[?point,'S',?eof],undefined},
-                                      {'V',[?point,'*','E'],'='},
-                                      {'V',[?point,'*','E'],?eof},
-                                      {'V',[?point,'x'],'='},
-                                      {'V',[?point,'x'],?eof}],
+                             items = [{{'E',[?point,'V']},[?eof]},
+                                      {{'S',[?point,'E']},[?eof]},
+                                      {{'S',[?point,'V','=','E']},[?eof]},
+                                      {{'S\'',[?point,'S',?eof]},[]},
+                                      {{'V',[?point,'*','E']},['=', ?eof]},
+                                      {{'V',[?point,'x']},['=', ?eof]}],
                              items_hash = Hash,
                              edges = [{'*',[4]},
                                       {'E',[2]},
@@ -631,30 +654,26 @@ dfa_table_2_test_() ->
                                       {'x',[5]}]} when is_integer(Hash),
                       lists:nth(1, Table)),
        ?_assertMatch(#state{id = 1,
-                             items = [{'E',['V',?point],?eof},
-                                      {'S',['V',?point,'=','E'],?eof}],
+                             items = [{{'E',['V',?point]},[?eof]},
+                                      {{'S',['V',?point,'=','E']},[?eof]}],
                              items_hash = Hash,
                              edges = [{'=',[6]}]} when is_integer(Hash),
                      lists:nth(2, Table)),
        ?_assertMatch(#state{id = 2,
-                             items = [{'S',['E',?point],?eof}],
+                             items = [{{'S',['E',?point]},[?eof]}],
                              items_hash = Hash,
                              edges = []} when is_integer(Hash),
                                               lists:nth(3, Table)),
         ?_assertMatch(#state{id = 3,
-                             items = [{'S\'',['S',?point,?eof],undefined}],
+                             items = [{{'S\'',['S',?point,?eof]},[]}],
                              items_hash = Hash,
                              edges = []} when is_integer(Hash),
                      lists:nth(4, Table)),
        ?_assertMatch(#state{id = 4,
-                            items = [{'E',[?point,'V'],'='},
-                                     {'E',[?point,'V'],?eof},
-                                     {'V',['*',?point,'E'],'='},
-                                     {'V',['*',?point,'E'],?eof},
-                                     {'V',[?point,'*','E'],'='},
-                                     {'V',[?point,'*','E'],?eof},
-                                     {'V',[?point,'x'],'='},
-                                     {'V',[?point,'x'],?eof}],
+                            items = [{{'E',[?point,'V']},['=', ?eof]},
+                                     {{'V',['*',?point,'E']},['=', ?eof]},
+                                     {{'V',[?point,'*','E']},['=', ?eof]},
+                                     {{'V',[?point,'x']},['=', ?eof]}],
                             items_hash = Hash,
                             edges = [{'*',[4]},
                                      {'E',[8]},
@@ -662,16 +681,15 @@ dfa_table_2_test_() ->
                                      {'x',[5]}]} when is_integer(Hash),
                      lists:nth(5, Table)),
         ?_assertMatch(#state{id = 5,
-                            items = [{'V',['x',?point],'='},
-                                     {'V',['x',?point],?eof}],
+                            items = [{{'V',['x',?point]},['=', ?eof]}],
                             items_hash = Hash,
                             edges = []} when is_integer(Hash),
                      lists:nth(6, Table)),
         ?_assertMatch(#state{id = 6,
-                             items = [{'E',[?point,'V'],?eof},
-                                      {'S',['V','=',?point,'E'],?eof},
-                                      {'V',[?point,'*','E'],?eof},
-                                      {'V',[?point,'x'],?eof}],
+                             items = [{{'E',[?point,'V']},[?eof]},
+                                      {{'S',['V','=',?point,'E']},[?eof]},
+                                      {{'V',[?point,'*','E']},[?eof]},
+                                      {{'V',[?point,'x']},[?eof]}],
                              items_hash = Hash,
                              edges = [{'*',[4]},
                                       {'E',[9]},
@@ -679,19 +697,17 @@ dfa_table_2_test_() ->
                                       {'x',[5]}]} when is_integer(Hash),
                      lists:nth(7, Table)),
         ?_assertMatch(#state{id = 7,
-                            items = [{'E',['V',?point],'='},
-                                     {'E',['V',?point],?eof}],
+                            items = [{{'E',['V',?point]},['=', ?eof]}],
                             items_hash = Hash,
                             edges = []} when is_integer(Hash),
                      lists:nth(8, Table)),
         ?_assertMatch(#state{id = 8,
-                            items = [{'V',['*','E',?point],'='},
-                                     {'V',['*','E',?point],?eof}],
+                            items = [{{'V',['*','E',?point]},['=', ?eof]}],
                             items_hash = Hash,
                             edges = []} when is_integer(Hash),
                      lists:nth(9, Table)),
         ?_assertMatch(#state{id = 9,
-                            items = [{'S',['V','=','E',?point],?eof}],
+                            items = [{{'S',['V','=','E',?point]},[?eof]}],
                             items_hash = Hash,
                             edges = []} when is_integer(Hash),
                      lists:nth(10, Table))
@@ -701,32 +717,37 @@ dfa_table_2_test_() ->
 check_test_() ->
   [
    ?_assertEqual(ok, check(#dfa{ states = [#state{id = 1,
-                                                  items = [{'S',['V',?point],?eof}],
+                                                  items = [{{'S',['V',?point]},[?eof]}],
                                                   edges = []}]})),
+
    ?_assertEqual({error, {conflicts, [{shift_reduce, 1}]}},
                  check(#dfa{ states = [#state{id = 1,
-                                              items = [{'S',['V',?point],'a'},
-                                                       {'S',['V',?point, 'E'],'a'}
+                                              items = [{{'S',['V',?point]},['a']},
+                                                       {{'S',['V',?point, 'E']},['a']}
                                                       ],
                                                   edges = []}]})),
+
    ?_assertEqual({error, {conflicts, [{reduce_reduce, 1}]}},
                  check(#dfa{ states = [#state{id = 1,
-                                              items = [{'S',['V',?point],?eof},
-                                                       {'S',['E',?point],?eof}
+                                              items = [{{'S',['V',?point]},[?eof]},
+                                                       {{'S',['E',?point]},[?eof]}
                                                       ],
                                                   edges = []}]})),
 
    ?_assertEqual({error, {conflicts, [{reduce_reduce, 1}, {shift_reduce, 1}]}},
-                 check(#dfa{ states = [#state{id = 1,
-                                              items = [{'S',['V',?point],'a'},
-                                                       {'S',['E',?point],'a'},
-                                                       {'S',['V',?point, 'E'],'a'}
-                                                      ],
-                                                  edges = []}]})),
-   ?_assertEqual(ok, check(#dfa{ states = [#state{id = 1,
-                                                  items = [{'S',['V',?point],?eof}
-                                                          ,{'S',['V',?point],'E'}],
-                                                  edges = []}]}))
+                 check(#dfa{ states =
+                               [#state{id = 1,
+                                       items = [{{'S',['V',?point]},['a']},
+                                                {{'S',['E',?point]},['a']},
+                                                {{'S',['V',?point, 'E']},['a']}
+                                               ],
+                                       edges = []}]})),
+
+   ?_assertEqual(ok, check(#dfa{ states =
+                                   [#state{id = 1,
+                                           items = [{{'S',['V',?point]},[?eof]},
+                                                     {{'S',['V',?point]},['E']}],
+                                           edges = []}]}))
   ].
 
 init_test_() ->
@@ -741,19 +762,22 @@ eof_test_() ->
    ?_assertEqual(accept,
                 action(#dfa{states =
                               [#state{id = 1,
-                                      items = [{'S',['V', ?point, ?eof],?eof}]}]},
+                                      items = [{{'S',['V', ?point, ?eof]},
+                                                [?eof]}]}]},
                        1,
                        ?eof)),
   ?_assertEqual({error, eof},
                 action(#dfa{states =
                               [#state{id = 1,
-                                      items = [{'S',['V', ?point, 'a'], 'a'}]}]},
+                                      items = [{{'S',['V', ?point, 'a']},
+                                                ['a']}]}]},
                        1,
                        ?eof)),
   ?_assertEqual({reduce, {'S', ['V']}},
                 action(#dfa{states =
                               [#state{id = 1,
-                                      items = [{'S',['V', ?point], ?eof}]}]},
+                                      items = [{{'S',['V', ?point]},
+                                                [?eof]}]}]},
                        1,
                        ?eof))
   ].
@@ -761,14 +785,16 @@ eof_test_() ->
 action_test_() ->
   [?_assertEqual({shift, 2},
                  action(#dfa{states = [#state{id = 1,
-                                              items = [{'S',[?point, 'V'],?eof}],
+                                              items = [{{'S',[?point, 'V']},
+                                                        [?eof]}],
                                               edges = [{'x', [2]}]}]},
                         1,
                         'x')),
   %% % Only option is to reduce
   ?_assertEqual({reduce, {'S', ['V']}},
                 action(#dfa{states = [#state{id = 1,
-                                             items = [{'S',['V', ?point],'a'}],
+                                             items = [{{'S',['V', ?point]},
+                                                       ['a']}],
                                              edges = []}],
                             precedence = [{'a',         {1, left}},
                                           {{'S',['V']}, {2, left}}]},
@@ -777,7 +803,8 @@ action_test_() ->
   % Rule has higher precedence
   ?_assertEqual({reduce, {'S', ['V']}},
                 action(#dfa{states = [#state{id = 1,
-                                             items = [{'S',['V', ?point],'a'}],
+                                             items = [{{'S',['V', ?point]},
+                                                       ['a']}],
                                              edges = [{'a', [2]}]}],
                             precedence = [{'a',         {1, left}},
                                           {{'S',['V']}, {2, left}}]},
@@ -786,7 +813,8 @@ action_test_() ->
   % Symbol has higher precedence
   ?_assertEqual({shift, 2},
                 action(#dfa{states = [#state{id = 1,
-                                             items = [{'S',['V', ?point],'a'}],
+                                             items = [{{'S',['V', ?point]},
+                                                       ['a']}],
                                              edges = [{'a', [2]}]}],
                             precedence = [{'a',         {2, left}},
                                           {{'S',['V']}, {1, left}}]},
@@ -795,7 +823,8 @@ action_test_() ->
   % Symbol and rule have same precedence, left associative
   ?_assertEqual({reduce, {'S', ['V']}},
                 action(#dfa{states = [#state{id = 1,
-                                             items = [{'S',['V', ?point],'a'}],
+                                             items = [{{'S',['V', ?point]},
+                                                       ['a']}],
                                              edges = [{'a', [2]}]}],
                             precedence = [{'a',         {1, left}},
                                           {{'S',['V']}, {1, left}}]},
@@ -804,7 +833,8 @@ action_test_() ->
   % Symbol and rule have same precedence, right associative
   ?_assertEqual({shift, 2},
                 action(#dfa{states = [#state{id = 1,
-                                             items = [{'S',['V', ?point],'a'}],
+                                             items = [{{'S',['V', ?point]},
+                                                       ['a']}],
                                              edges = [{'a', [2]}]}],
                             precedence = [{'a',         {1, right}},
                                           {{'S',['V']}, {1, right}}]},
@@ -813,7 +843,8 @@ action_test_() ->
   % Symbol has no precedence
   ?_assertEqual({shift, 2},
                 action(#dfa{states = [#state{id = 1,
-                                             items = [{'S',['V', ?point],'a'}],
+                                             items = [{{'S',['V', ?point]},
+                                                       ['a']}],
                                              edges = [{'a', [2]}]}],
                             precedence = [{{'S',['V']}, {2, left}}]},
                        1,
@@ -821,7 +852,8 @@ action_test_() ->
   % Rule has no precedence
   ?_assertEqual({shift, 2},
                 action(#dfa{states = [#state{id = 1,
-                                             items = [{'S',['V', ?point],'a'}],
+                                             items = [{{'S',['V', ?point]},
+                                                       ['a']}],
                                              edges = [{'a', [2]}]}],
                             precedence = [{'a', {1, left}}]},
                        1,
@@ -829,7 +861,8 @@ action_test_() ->
   % Neither has precedence
   ?_assertEqual({shift, 2},
                 action(#dfa{states = [#state{id = 1,
-                                             items = [{'S',['V', ?point],'a'}],
+                                             items = [{{'S',['V', ?point]},
+                                                       ['a']}],
                                              edges = [{'a', [2]}]}],
                             precedence = []},
                        1,
@@ -837,7 +870,8 @@ action_test_() ->
    % Nonassoc declaration triggers a syntax error
    ?_assertEqual({error, {unexpected_token, 'a'}},
                  action(#dfa{states = [#state{id = 1,
-                                              items = [{'S',['V', ?point],'a'}],
+                                              items = [{{'S',['V', ?point]},
+                                                        ['a']}],
                                               edges = [{'a', [2]}]}],
                              precedence = [{'a',         {1, nonassoc}},
                                            {{'S',['V']}, {1, nonassoc}}]},
@@ -846,7 +880,7 @@ action_test_() ->
    ?_assertEqual({error, {unexpected_token, 'A'}},
                  action(#dfa{states =
                                [#state{id = 1,
-                                       items = [{'B', [?point, 'A'], 'a'}]}]},
+                                       items = [{{'B', [?point, 'A']}, ['a']}]}]},
                         1,
                         'A'))
   ].
@@ -855,14 +889,14 @@ goto_test_() ->
   [?_assertEqual({ok, 2},
                  goto(#dfa{states =
                              [#state{id = 1,
-                                     items = [{'B', [?point, 'A'], 'a'}],
+                                     items = [{{'B', [?point, 'A']}, ['a']}],
                                      edges = [{'A', [2]}]}]},
                       1,
                       'A')),
    ?_assertEqual({error, {unexpected_token, 'B'}},
                  goto(#dfa{states =
                              [#state{id = 1,
-                                     items = [{'B', [?point, 'A'], 'a'}],
+                                     items = [{{'B', [?point, 'A']}, ['a']}],
                                      edges = [{'A', [2]}]}]},
                       1,
                       'B'))
@@ -878,41 +912,33 @@ cyclic_dfa_test_() ->
                           []))
   end,
   fun(#dfa{states = States}) ->
-      [?_assertMatch(#state{id = 0,
-                            items = [{'E',[?point,'1'],'+'},
-                                     {'E',[?point,'1'],?eof},
-                                     {'E',[?point,'E','+','E'],'+'},
-                                     {'E',[?point,'E','+','E'],?eof},
-                                     {'E\'',[?point,'E',?eof],undefined}],
+      [?_assertEqual(5, length(States)),
+       ?_assertMatch(#state{id = 0,
+                            items = [{{'E',[?point,'1']},['+', ?eof]},
+                                     {{'E',[?point,'E','+','E']},['+', ?eof]},
+                                     {{'E\'',[?point,'E',?eof]},[]}],
                             edges = [{'1',[1]},
                                      {'E',[2]}]},
                      lists:nth(1, States)),
        ?_assertMatch(#state{id = 1,
-                            items = [{'E',['1',?point],'+'},
-                                     {'E',['1',?point],?eof}],
+                            items = [{{'E',['1',?point]},['+', ?eof]}],
                             edges = []},
                      lists:nth(2, States)),
        ?_assertMatch(#state{id = 2,
-                            items = [{'E',['E',?point,'+','E'],'+'},
-                                     {'E',['E',?point,'+','E'],?eof},
-                                     {'E\'',['E',?point,?eof],undefined}],
+                            items = [{{'E',['E',?point,'+','E']},['+', ?eof]},
+                                     {{'E\'',['E',?point,?eof]},[]}],
                             edges = [{'+',[3]}]},
                     lists:nth(3, States)),
        ?_assertMatch(#state{id = 3,
-                            items = [{'E',['E','+',?point,'E'],'+'},
-                                     {'E',['E','+',?point,'E'],?eof},
-                                     {'E',[?point,'1'],'+'},
-                                     {'E',[?point,'1'],?eof},
-                                     {'E',[?point,'E','+','E'],'+'},
-                                     {'E',[?point,'E','+','E'],?eof}],
+                            items = [{{'E',['E','+',?point,'E']},['+', ?eof]},
+                                     {{'E',[?point,'1']},['+', ?eof]},
+                                     {{'E',[?point,'E','+','E']},['+', ?eof]}],
                             edges = [{'1',[1]},
                                      {'E',[4]}]},
                      lists:nth(4, States)),
        ?_assertMatch(#state{id = 4,
-                            items = [{'E',['E','+','E',?point],'+'},
-                                     {'E',['E','+','E',?point],?eof},
-                                     {'E',['E',?point,'+','E'],'+'},
-                                     {'E',['E',?point,'+','E'],?eof}],
+                            items = [{{'E',['E','+','E',?point]},['+', ?eof]},
+                                     {{'E',['E',?point,'+','E']},['+', ?eof]}],
                             edges = [{'+',[3]}]},
                     lists:nth(5, States))
       ]
@@ -923,44 +949,49 @@ reduction_item_test_() ->
    ?_assertEqual({undefined, undefined},
                 reduction_item([], [], [])),
    % Only one item
-   ?_assertEqual({undefined, {'A', ['a', ?point], 'b'}},
-                reduction_item([{'A', ['a', ?point], 'b'}], [], 'b')),
+   ?_assertEqual({undefined, {{'A', ['a', ?point]}, ['b']}},
+                reduction_item([{{'A', ['a', ?point]}, ['b']}], [], 'b')),
    % Take first rule if no precedence  specified
-   ?_assertEqual({undefined, {'A', ['a', ?point], 'b'}},
-                reduction_item([{'A', ['a', ?point], 'b'},
-                                {'B', ['a', ?point], 'b'}],
+   ?_assertEqual({undefined, {{'A', ['a', ?point]}, ['b']}},
+                reduction_item([{{'A', ['a', ?point]}, ['b']},
+                                {{'B', ['a', ?point]}, ['b']}],
                                [],
                                'b')),
    % Assert that first rule is ignored if it's not a reduction rule
-   ?_assertEqual({undefined, {'B', ['a', ?point], 'b'}},
-                reduction_item([{'A', ['a', ?point, 'c'], 'b'},
-                                {'B', ['a', ?point], 'b'}],
+   ?_assertEqual({undefined, {{'B', ['a', ?point]}, ['b']}},
+                reduction_item([{{'A', ['a', ?point, 'c']}, ['b']},
+                                {{'B', ['a', ?point]}, ['b']}],
                                [],
                                'b')),
    % Assert that first rule is ignored if its lookahead doesn't match
-   ?_assertEqual({undefined, {'B', ['a', ?point], 'b'}},
-                reduction_item([{'A', ['a', ?point], 'a'},
-                                {'B', ['a', ?point], 'b'}],
+   ?_assertEqual({undefined, {{'B', ['a', ?point]}, ['b']}},
+                reduction_item([{{'A', ['a', ?point]}, ['a']},
+                                {{'B', ['a', ?point]}, ['b']}],
                                [],
                                'b')),
    % Assert that rule with precedence is chosen over rule with no precedence
-   ?_assertEqual({1, {'B', ['a', ?point], 'b'}},
-                reduction_item([{'A', ['a', ?point], 'b'},
-                                {'B', ['a', ?point], 'b'}],
-                               [{{'B', ['a', ?point], 'b'}, 1}],
+   ?_assertEqual({1, {{'B', ['a', ?point]}, ['b']}},
+                reduction_item([{{'A', ['a', ?point]}, ['b']},
+                                {{'B', ['a', ?point]}, ['b']}],
+                               [{{{'B', ['a', ?point]}, ['b']}, 1}],
                                'b')),
    % Assert that rule with highest precedence is chosen
-   ?_assertEqual({3, {'B', ['a', ?point], 'b'}},
-                reduction_item([{'A', ['a', ?point], 'b'},
-                                {'B', ['a', ?point], 'b'},
-                                {'C', ['a', ?point], 'b'}],
-                               [{{'A', ['a', ?point], 'b'}, 1},
-                                {{'B', ['a', ?point], 'b'}, 3},
-                                {{'C', ['a', ?point], 'b'}, 2}],
+   ?_assertEqual({3, {{'B', ['a', ?point]}, ['b']}},
+                reduction_item([{{'A', ['a', ?point]}, ['b']},
+                                {{'B', ['a', ?point]}, ['b']},
+                                {{'C', ['a', ?point]}, ['b']}],
+                               [{{{'A', ['a', ?point]}, ['b']}, 1},
+                                {{{'B', ['a', ?point]}, ['b']}, 3},
+                                {{{'C', ['a', ?point]}, ['b']}, 2}],
                                'b'))
   ].
 
-%%%_* Test helpers =============================================================
+merge_closures_test_() ->
+  [?_assertEqual([{{'A', ['a']}, ['a', 'b']}],
+                merge_closures([{{'A', ['a']}, ['a']}],
+                               [{{'A', ['a']}, ['b']}]))
+  ].
+
 %%%_* Emacs ====================================================================
 %%% Local Variables:
 %%% allout-layout: t
