@@ -37,7 +37,6 @@
 -export_type([grammar/0,
               rule/0,
               production/0,
-              symbol/0,
               action/0,
 
               associativity/0,
@@ -50,27 +49,29 @@
 
 %%%_* Defines ==================================================================
 
--record(grammar, {rules         :: [rule()],
-                  start_symbols :: [symbol()],
-                  term_symbols  :: [symbol()],
+-record(grammar, {rules         :: [elx:rule()],
+                  start_symbols :: [elx:symbol()],
+                  term_symbols  :: [elx:symbol()],
                   precedence    :: [{precedence_lvl(),
                                      associativity(),
-                                     [symbol()]}]}).
+                                     [elx:symbol()]}]}).
 
 %%%_* Types ====================================================================
 
 -opaque grammar()       :: #grammar{}.
--type rule()            :: {symbol(), [rule_component()]} |
-                           {symbol(), [rule_component()], action()} |
-                           {symbol(), [rule_component()], symbol()} |
-                           {symbol(), [rule_component()], action(), symbol()}.
+-type rule()            :: {elx:symbol(), [rule_component()]} |
+                           {elx:symbol(), [rule_component()], action()} |
+                           {elx:symbol(), [rule_component()], elx:symbol()} |
+                           {elx:symbol(),
+                            [rule_component()],
+                            action(),
+                            elx:symbol()}.
 
--type rule_component()  :: symbol() | ?point | ?eof.
+-type rule_component()  :: elx:symbol() | ?point | ?eof.
 
--type production()      :: {non_term_symbol, [symbol()]}.
+-type production()      :: {elx:non_term_symbol(), [elx:symbol()]}.
 -type action()          :: fun().
 
--type symbol()          :: atom().
 -type associativity()   :: left | right | nonassoc.
 -type precedence()      :: pos_integer().
 -type precedence_lvl()  :: {precedence(), associativity()}.
@@ -94,9 +95,9 @@ action(#grammar{rules = Rules}, Rule, Token) ->
 %%------------------------------------------------------------------------------
 %% @doc Return a new grammar() instance.
 -spec new(Rules           :: rule(),
-          Terminals       :: [symbol()],
-          StartSymbols    :: [symbol()],
-          PrecedenceDecls :: [{associativity(), [symbol()]}]) -> grammar().
+          Terminals       :: [elx:symbol()],
+          StartSymbols    :: [elx:symbol()],
+          PrecedenceDecls :: [{associativity(), [elx:symbol()]}]) -> grammar().
 %%------------------------------------------------------------------------------
 new(Rules0, Terminals, StartSymbols, PrecedenceDecls) ->
   validate(Rules0, Terminals, StartSymbols, PrecedenceDecls),
@@ -115,7 +116,7 @@ new(Rules0, Terminals, StartSymbols, PrecedenceDecls) ->
 %% @doc
 %% Return a list of all symbol() -> [symbol()] productions of
 %% Grammar
--spec productions(Grammar :: grammar()) -> [{symbol(), [symbol()]}].
+-spec productions(Grammar :: grammar()) -> [production()].
 %%------------------------------------------------------------------------------
 productions(#grammar{rules = Rules}) ->
   lists:map(fun({Production, _, _}) -> Production
@@ -125,27 +126,27 @@ productions(#grammar{rules = Rules}) ->
 %%------------------------------------------------------------------------------
 %% @doc Return the precedence of Rule if defined.
 -spec precedence(Grammar :: grammar()) ->
-                    [{symbol() | production(), precedence_lvl()}].
+                    [{elx:symbol() | production(), precedence_lvl()}].
 %%------------------------------------------------------------------------------
 precedence(Grammar) -> Grammar#grammar.precedence.
 
 %%------------------------------------------------------------------------------
 %% @doc Return Symbol converted to a valid start symbol Grammar.
--spec symbol_to_start_symbol(symbol()) -> symbol().
+-spec symbol_to_start_symbol(elx:symbol()) -> elx:symbol().
 %%------------------------------------------------------------------------------
 symbol_to_start_symbol(Symbol) ->
   list_to_atom(atom_to_list(Symbol) ++ "'").
 
 %%------------------------------------------------------------------------------
 %% @doc Return the start symbols valid for Grammar.
--spec start_symbols(Grammar :: grammar()) -> [symbol()].
+-spec start_symbols(Grammar :: grammar()) -> [elx:symbol()].
 %%------------------------------------------------------------------------------
 start_symbols(#grammar{start_symbols = Start}) ->
   Start.
 
 %%------------------------------------------------------------------------------
 %% @doc Return the term symbols valid for Grammar.
--spec term_symbols(Grammar :: grammar()) -> [symbol()].
+-spec term_symbols(Grammar :: grammar()) -> [elx:symbol()].
 %%------------------------------------------------------------------------------
 term_symbols(#grammar{term_symbols = TermSymbols}) ->
   TermSymbols.

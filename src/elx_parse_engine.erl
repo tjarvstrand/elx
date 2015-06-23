@@ -34,7 +34,8 @@
 -module(elx_parse_engine).
 
 %%%_* Exports ==================================================================
--export([run/3]).
+-export([run/3,
+         new/1]).
 
 -export_type([]).
 
